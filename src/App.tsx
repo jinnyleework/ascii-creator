@@ -23,9 +23,12 @@ import {
   bitmapToPngDataUrl,
   underlayImgStyle,
 } from './exportPng'
-import logoAsciiCreator from './assets/logo-ascii-creator.png'
 import horseAscii from './assets/horse-ascii.png'
+import horseHomeAscii from './assets/horse-home-ascii.png'
+import horseHome8bit from './assets/horse-home-8bit.png'
 import './App.css'
+import { EightBitTool } from './pages/EightBitTool'
+import { BrandLogoHoverMark, ToolBrandHomeLink } from './toolUi'
 
 const CHARSET_PRESETS: { label: string; value: string }[] = [
   { label: 'Detailed', value: DEFAULT_CHARSET },
@@ -804,34 +807,86 @@ function useImageBitmap(file: File | null) {
   return bitmap
 }
 
+type HomeHorseFocus = 'neutral' | 'ascii' | 'eight'
+
+function HomeScreen(props: {
+  onPickAscii: () => void
+  onPickEightbit: () => void
+  onDragOver: (e: React.DragEvent) => void
+  onDrop: (e: React.DragEvent) => void
+}) {
+  const { onPickAscii, onPickEightbit, onDragOver, onDrop } = props
+  const [horseFocus, setHorseFocus] = useState<HomeHorseFocus>('neutral')
+
+  return (
+    <div
+      className="home-figma"
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
+      <div className="home-figma__inner">
+        <header className="home-figma__header">
+          <BrandLogoHoverMark className="home-figma__mark" />
+          <h1 className="home-figma__title">image player</h1>
+          <p className="home-figma__sub">a jinny lee playground</p>
+        </header>
+
+        <div
+          className={`home-figma__horse-stack home-figma__horse-stack--${horseFocus}`}
+          aria-hidden
+        >
+          <img
+            className="home-figma__horse-img home-figma__horse-img--8bit"
+            src={horseHome8bit}
+            alt=""
+            draggable={false}
+          />
+          <img
+            className="home-figma__horse-img home-figma__horse-img--ascii"
+            src={horseHomeAscii}
+            alt=""
+            draggable={false}
+          />
+        </div>
+
+        <nav className="home-figma__tools" aria-label="Tools">
+          <button
+            type="button"
+            className="home-figma__tool"
+            onClick={onPickAscii}
+            onMouseEnter={() => setHorseFocus('ascii')}
+            onMouseLeave={() => setHorseFocus('neutral')}
+            onFocus={() => setHorseFocus('ascii')}
+            onBlur={() => setHorseFocus('neutral')}
+          >
+            <span className="home-figma__tool-label">ascii</span>
+          </button>
+          <button
+            type="button"
+            className="home-figma__tool"
+            onClick={onPickEightbit}
+            onMouseEnter={() => setHorseFocus('eight')}
+            onMouseLeave={() => setHorseFocus('neutral')}
+            onFocus={() => setHorseFocus('eight')}
+            onBlur={() => setHorseFocus('neutral')}
+          >
+            <span className="home-figma__tool-label">8bit</span>
+          </button>
+        </nav>
+      </div>
+    </div>
+  )
+}
+
 function SidebarBrand({ onLogoClick }: { onLogoClick: () => void }) {
-  const [spinning, setSpinning] = useState(false)
-
-  const handleLogoClick = () => {
-    setSpinning(true)
-    onLogoClick()
-  }
-
   return (
     <div className="sidebar-brand">
       <div className="sidebar-brand-logo-wrap">
-        <TooltipSpan kind="info" tip="Roll the design" className="info-tip-wrap">
-          <button
-            type="button"
-            className={`sidebar-brand-logo-btn${spinning ? ' is-spinning' : ''}`}
-            onClick={handleLogoClick}
-            onAnimationEnd={() => setSpinning(false)}
-            aria-label="Roll the design"
-          >
-            <img
-              className="sidebar-brand-logo"
-              src={logoAsciiCreator}
-              alt=""
-              width={33}
-              height={36}
-              decoding="async"
-            />
-          </button>
+        <TooltipSpan kind="info" tip="Back to home" className="info-tip-wrap">
+          <ToolBrandHomeLink
+            onPress={onLogoClick}
+            ariaLabel="Back to home"
+          />
         </TooltipSpan>
       </div>
       <div className="sidebar-brand-text">
@@ -962,6 +1017,10 @@ export default function App() {
   const [bgRemoveError, setBgRemoveError] = useState<string | null>(null)
   /** Processed image used only for ASCII; original `file` stays for preview / overlay. */
   const [nobgFile, setNobgFile] = useState<File | null>(null)
+  const [appScreen, setAppScreen] = useState<'home' | 'eightbit' | 'workspace'>(
+    'home'
+  )
+  const [diceSpinning, setDiceSpinning] = useState(false)
 
   const fileRef = useRef<HTMLInputElement>(null)
   const charsetTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -1166,7 +1225,9 @@ export default function App() {
   const onInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const f = e.target.files?.[0]
-      onFile(f && f.type.startsWith('image/') ? f : null)
+      const next = f && f.type.startsWith('image/') ? f : null
+      onFile(next)
+      if (next) setAppScreen('workspace')
     },
     [onFile]
   )
@@ -1174,7 +1235,9 @@ export default function App() {
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     const f = e.dataTransfer.files?.[0]
-    onFile(f && f.type.startsWith('image/') ? f : null)
+    const next = f && f.type.startsWith('image/') ? f : null
+    onFile(next)
+    if (next) setAppScreen('workspace')
   }, [onFile])
 
   const copy = useCallback(async () => {
@@ -1468,6 +1531,19 @@ export default function App() {
     setOverlayOnImage(randBool())
   }, [])
 
+  const goHome = useCallback(() => {
+    setAppScreen('home')
+    setExportOpen(false)
+    setPresetsOpen(false)
+    setCopyState('idle')
+    onFile(null)
+  }, [onFile])
+
+  const handleRailRandomize = useCallback(() => {
+    setDiceSpinning(true)
+    randomizeSettings()
+  }, [randomizeSettings])
+
   const animModeLabel: Record<AnimationMode, string> = {
     hue: 'hue drift',
     ramp: 'ramp drift',
@@ -1487,7 +1563,7 @@ export default function App() {
   }
 
   return (
-    <div className="shell">
+    <>
       <input
         ref={fileRef}
         type="file"
@@ -1497,9 +1573,20 @@ export default function App() {
         aria-label="Choose image file"
       />
 
+      {appScreen === 'home' ? (
+        <HomeScreen
+          onPickAscii={() => setAppScreen('workspace')}
+          onPickEightbit={() => setAppScreen('eightbit')}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={onDrop}
+        />
+      ) : appScreen === 'eightbit' ? (
+        <EightBitTool onBackHome={() => setAppScreen('home')} />
+      ) : (
+    <div className="shell">
       <aside className="sidebar">
         <div className="sidebar-top">
-          <SidebarBrand onLogoClick={randomizeSettings} />
+          <SidebarBrand onLogoClick={goHome} />
           {sourceBitmap && previewUrl && (
             <>
               <div className="sidebar-image-block">
@@ -1883,6 +1970,26 @@ export default function App() {
 
       <div className="right-rail">
         <div className="icon-dock" aria-label="Preview actions">
+          <RailTip tip="Roll the design">
+            <button
+              type="button"
+              className={`icon-btn${diceSpinning ? ' is-spinning' : ''}`}
+              aria-label="Roll the design"
+              onClick={handleRailRandomize}
+              onAnimationEnd={() => setDiceSpinning(false)}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path
+                  d="M4 10a8 8 0 0 1 8-8v4l3-3-3-3M20 14a8 8 0 0 1-8 8v-4l-3 3 3 3"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </RailTip>
+
           <RailTip tip="Background colour">
             <label className="icon-btn icon-swatch">
               <input
@@ -2159,5 +2266,7 @@ export default function App() {
         </div>
       </div>
     </div>
+      )}
+    </>
   )
 }

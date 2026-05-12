@@ -134,6 +134,213 @@
   animation: sidebar-brand-logo-spin 0.65s ease-in-out;
 }
 
+/* 8-bit tool: brand control returns to tool picker (see `ToolBrandHomeLink`). */
+.sidebar-brand-home-link {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  line-height: 0;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  /* Layer crossfade + logo tint step together; spin is slower on its own clock */
+  --brand-home-switch-dur: 2.2s;
+  --brand-home-spin-dur: 4.75s;
+}
+
+/* Figma home header mark: same layers + tint + spin, scaled to ~21×23 */
+.sidebar-brand-home-link.sidebar-brand-home-link--home {
+  display: inline-block;
+  width: auto;
+  line-height: 0;
+  cursor: default;
+  transform: scale(0.6363);
+  transform-origin: 50% 0;
+}
+
+.sidebar-brand-home-link:focus {
+  outline: none;
+}
+
+.sidebar-brand-home-link:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+}
+
+.sidebar-brand-home-spin {
+  display: block;
+  width: 33px;
+  height: 36px;
+  line-height: 0;
+  transform-origin: 50% 50%;
+}
+
+.sidebar-brand-home-stack {
+  position: relative;
+  display: block;
+  width: 33px;
+  height: 36px;
+  isolation: isolate;
+}
+
+.sidebar-brand-home-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  backface-visibility: hidden;
+}
+
+.sidebar-brand-home-layer--vector {
+  opacity: 1;
+}
+
+.sidebar-brand-home-layer--eightbit,
+.sidebar-brand-home-layer--ascii {
+  opacity: 0;
+}
+
+.sidebar-brand-home-eightbit-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 33px;
+  height: 36px;
+}
+
+.sidebar-brand-home-eightbit-img {
+  display: block;
+  width: 5px;
+  height: auto;
+  image-rendering: pixelated;
+  transform: scale(6.5);
+  transform-origin: center center;
+}
+
+.sidebar-brand-home-ascii-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 33px;
+  height: 36px;
+}
+
+.sidebar-brand-home-ascii-img {
+  display: block;
+  width: 33px;
+  height: auto;
+  max-height: 36px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  /* Keep chroma so parent stack `filter` tint reads on this phase */
+  filter: contrast(1.35) saturate(0.65) brightness(0.96);
+}
+
+@keyframes brand-home-stack-tint {
+  0%,
+  24.98% {
+    filter: hue-rotate(-10deg) saturate(1.38) contrast(1.06);
+  }
+  25%,
+  49.98% {
+    filter: hue-rotate(275deg) saturate(1.72) contrast(1.1);
+  }
+  50%,
+  74.98% {
+    filter: hue-rotate(168deg) saturate(1.62) contrast(1.08);
+  }
+  75%,
+  100% {
+    filter: hue-rotate(-10deg) saturate(1.38) contrast(1.06);
+  }
+}
+
+@keyframes brand-home-vector {
+  0%,
+  24.98% {
+    opacity: 1;
+  }
+  25%,
+  74.98% {
+    opacity: 0;
+  }
+  75%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes brand-home-eightbit {
+  0%,
+  24.98% {
+    opacity: 0;
+  }
+  25%,
+  49.98% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes brand-home-ascii {
+  0%,
+  49.98% {
+    opacity: 0;
+  }
+  50%,
+  74.98% {
+    opacity: 1;
+  }
+  75%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes brand-home-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(720deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-brand-home-link:hover .sidebar-brand-home-stack,
+  .sidebar-brand-home-link:focus-visible .sidebar-brand-home-stack {
+    animation: brand-home-stack-tint var(--brand-home-switch-dur) linear infinite;
+  }
+
+  .sidebar-brand-home-link:hover .sidebar-brand-home-spin,
+  .sidebar-brand-home-link:focus-visible .sidebar-brand-home-spin {
+    animation: brand-home-spin var(--brand-home-spin-dur) linear infinite;
+  }
+
+  .sidebar-brand-home-link:hover .sidebar-brand-home-layer--vector,
+  .sidebar-brand-home-link:focus-visible .sidebar-brand-home-layer--vector {
+    animation: brand-home-vector var(--brand-home-switch-dur) linear infinite;
+  }
+
+  .sidebar-brand-home-link:hover .sidebar-brand-home-layer--eightbit,
+  .sidebar-brand-home-link:focus-visible .sidebar-brand-home-layer--eightbit {
+    animation: brand-home-eightbit var(--brand-home-switch-dur) linear infinite;
+  }
+
+  .sidebar-brand-home-link:hover .sidebar-brand-home-layer--ascii,
+  .sidebar-brand-home-link:focus-visible .sidebar-brand-home-layer--ascii {
+    animation: brand-home-ascii var(--brand-home-switch-dur) linear infinite;
+  }
+}
+
 .sidebar-brand-logo {
   display: block;
   width: 100%;
@@ -695,6 +902,219 @@
   text-align: center;
 }
 
+/* Figma home — pet-projects node 21:1977 */
+.home-figma {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  width: 100%;
+  background: #ffffff;
+  color: #0a0a0a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+}
+
+.home-figma__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(40px, 8vh, 63px);
+  width: 100%;
+  max-width: 868px;
+}
+
+.home-figma__header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.home-figma__mark {
+  display: inline-block;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.home-figma__title {
+  margin: 0;
+  font-family: Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia,
+    'Times New Roman', serif;
+  font-size: 24px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: #0a0a0a;
+}
+
+.home-figma__sub {
+  margin: 0;
+  font-family: Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia,
+    'Times New Roman', serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: #737373;
+}
+
+.home-figma__horse-stack {
+  position: relative;
+  width: min(524px, 92vw);
+  aspect-ratio: 523 / 347;
+  margin: 0 auto;
+}
+
+.home-figma__horse-stack::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.28s ease;
+}
+
+.home-figma__horse-stack--ascii::after {
+  opacity: 1;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.11),
+    rgba(0, 0, 0, 0.11) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+.home-figma__horse-stack--eight::after {
+  opacity: 1;
+  background-image:
+    linear-gradient(
+      90deg,
+      rgba(168, 85, 247, 0.07) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      rgba(34, 211, 238, 0.08) 1px,
+      transparent 1px
+    );
+  background-size: 8px 8px;
+  mix-blend-mode: multiply;
+}
+
+.home-figma__horse-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  transition:
+    opacity 0.28s ease,
+    filter 0.28s ease;
+}
+
+.home-figma__horse-img--8bit {
+  z-index: 1;
+  object-position: 52% 48%;
+  transform: scale(1.06);
+  opacity: 0.58;
+}
+
+.home-figma__horse-img--ascii {
+  z-index: 2;
+  opacity: 1;
+}
+
+.home-figma__horse-stack--ascii .home-figma__horse-img--ascii {
+  opacity: 1;
+  filter: contrast(1.12) saturate(1.06) brightness(0.99);
+}
+
+.home-figma__horse-stack--ascii .home-figma__horse-img--8bit {
+  opacity: 0.14;
+  filter: contrast(1.28) brightness(0.88) saturate(1.12) blur(0.4px);
+}
+
+.home-figma__horse-stack--eight .home-figma__horse-img--ascii {
+  opacity: 0.28;
+  filter: grayscale(0.35) contrast(1.08) saturate(0.75) blur(0.35px);
+}
+
+.home-figma__horse-stack--eight .home-figma__horse-img--8bit {
+  opacity: 1;
+  filter: contrast(1.12) saturate(1.18) brightness(1.02);
+  image-rendering: pixelated;
+}
+
+.home-figma__tools {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.home-figma__tool-label {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 3px;
+}
+
+.home-figma__tool-label::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 1px;
+  background: #0a0a0a;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.42s cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.home-figma__tool:hover:not(:disabled) .home-figma__tool-label::after,
+.home-figma__tool:focus-visible:not(:disabled) .home-figma__tool-label::after {
+  transform: scaleX(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-figma__tool-label::after {
+    transition-duration: 0.01ms;
+  }
+}
+
+.home-figma__tool {
+  position: relative;
+  z-index: 0;
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  padding: 24px 10px;
+  border: none;
+  background: #ffffff;
+  font-family: Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia,
+    'Times New Roman', serif;
+  font-size: 20px;
+  font-weight: 300;
+  line-height: 1.2;
+  color: #0a0a0a;
+  cursor: pointer;
+}
+
+.home-figma__tool:focus {
+  outline: none;
+}
+
+.home-figma__tool:focus-visible {
+  outline: 2px solid #0a0a0a;
+  outline-offset: -2px;
+  position: relative;
+  z-index: 1;
+}
+
 .sidebar-image-block {
   display: flex;
   flex-direction: row;
@@ -968,6 +1388,11 @@
   cursor: not-allowed;
 }
 
+.icon-btn.is-spinning {
+  transform-origin: 50% 50%;
+  animation: sidebar-brand-logo-spin 0.65s ease-in-out;
+}
+
 .icon-btn.icon-swatch {
   position: relative;
   cursor: pointer;
@@ -1178,4 +1603,31 @@
 .presets-delete:hover {
   background: var(--bg);
   color: var(--foreground);
+}
+
+/* 8-bit preview stage */
+.pixel-stage {
+  min-height: 200px;
+}
+
+.pixel-canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.pixel-overlay-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  z-index: 1;
+  mix-blend-mode: normal;
+  opacity: 0.92;
+}
+
+.pixel-overlay-cell {
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12);
 }
