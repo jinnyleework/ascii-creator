@@ -8,6 +8,85 @@ export interface PngExportOptions {
   pixelRatio: number
 }
 
+export interface OverlayPngExportOptions {
+  bitmap: ImageBitmap
+  useColor: boolean
+  grayscaleGlyphColor: string
+  photoGrayscale: boolean
+  /** Sharpness multiplier (2 = double internal resolution). */
+  pixelRatio: number
+}
+
+/** Mirrors the AsciiImageOverlay viewfinder (image + per-cell centred glyphs with a faint outline). */
+export function asciiOverlayToPngBlob(
+  result: AsciiResult,
+  opts: OverlayPngExportOptions
+): Promise<Blob | null> {
+  const { bitmap, useColor, grayscaleGlyphColor, photoGrayscale, pixelRatio } = opts
+  if (result.cols <= 0 || result.rows <= 0) return Promise.resolve(null)
+
+  const bw = bitmap.width
+  const bh = bitmap.height
+  const w = Math.round(bw * pixelRatio)
+  const h = Math.round(bh * pixelRatio)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return Promise.resolve(null)
+
+  if (photoGrayscale) {
+    ctx.filter = 'grayscale(1) contrast(1.06)'
+  }
+  ctx.drawImage(bitmap, 0, 0, w, h)
+  ctx.filter = 'none'
+
+  const cellW = w / result.cols
+  const cellH = h / result.rows
+  const fontPx = Math.max(2, Math.min(cellW / 0.62, cellH * 0.92))
+  const fontFamily =
+    '"Geist Mono", ui-monospace, Consolas, "Cascadia Code", "SF Mono", Menlo, monospace'
+
+  ctx.font = `500 ${fontPx}px ${fontFamily}`
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'center'
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.35)'
+  ctx.shadowBlur = Math.max(1, 3 * pixelRatio)
+
+  for (let yi = 0; yi < result.rows; yi++) {
+    const row = result.lines[yi]
+    if (!row) continue
+    const cy = (yi + 0.5) * cellH
+    for (let xi = 0; xi < row.length; xi++) {
+      const cell = row[xi]!
+      const cx = (xi + 0.5) * cellW
+      ctx.fillStyle = useColor ? cell.color : grayscaleGlyphColor
+      ctx.fillText(cell.ch, cx, cy)
+    }
+  }
+
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), 'image/png')
+  })
+}
+
+export function bitmapToPngDataUrl(
+  bitmap: ImageBitmap,
+  photoGrayscale: boolean
+): string | null {
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  if (photoGrayscale) {
+    ctx.filter = 'grayscale(1) contrast(1.06)'
+  }
+  ctx.drawImage(bitmap, 0, 0)
+  return canvas.toDataURL('image/png')
+}
+
 export function asciiResultToPngBlob(
   result: AsciiResult,
   opts: PngExportOptions

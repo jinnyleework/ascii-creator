@@ -1,5 +1,3 @@
-import { DEFAULT_CHARSET } from './charset'
-
 export type GrayscaleMode =
   | 'luminance'
   | 'average'
@@ -8,7 +6,13 @@ export type GrayscaleMode =
   | 'green'
   | 'blue'
 
-export type AnimationMode = 'solarize' | 'ramp' | 'hue'
+export type AnimationMode =
+  | 'solarize'
+  | 'ramp'
+  | 'hue'
+  | 'sharpen'
+  | 'edge'
+  | 'glow'
 
 export interface AsciiPipelineParams {
   columns: number
@@ -27,7 +31,7 @@ export interface AsciiPipelineParams {
   grayscaleGlyphHex: string
   /** When useColor: HSL saturation multiplier (1 = unchanged, above 1 = more vivid). */
   colorSaturation: number
-  /** 0–1, drives solarize / ramp / hue when animating */
+  /** 0–1, drives animation modes when animating */
   animationPhase: number
   animationMode: AnimationMode | null
 }
@@ -47,6 +51,11 @@ export interface AsciiResult {
 
 function clamp255(n: number): number {
   return Math.max(0, Math.min(255, Math.round(n)))
+}
+
+/** 0 at phase 0, 1 at phase 0.5, 0 at phase 1 — smooth low → high → low. */
+function animWave01(phase: number): number {
+  return (1 - Math.cos(phase * Math.PI * 2)) / 2
 }
 
 function normalizeHex6(s: string): string | null {
@@ -246,7 +255,9 @@ function sobelMax(gray: Float32Array, cols: number, rows: number): Float32Array 
 
 function getRamp(charset: string): string {
   const stripped = charset.replace(/\r?\n/g, '')
-  return stripped.length > 0 ? stripped : DEFAULT_CHARSET
+  if (stripped.length > 0) return stripped
+  // Empty custom ramp: minimal two-step ramp until the user adds characters
+  return ' .'
 }
 
 export function buildAscii(
@@ -308,22 +319,32 @@ export function buildAscii(
     }
   }
 
-  const passes = Math.max(0, Math.min(8, Math.round(params.blurPasses)))
+  let passes = Math.max(0, Math.min(8, Math.round(params.blurPasses)))
+  if (params.animationMode === 'glow') {
+    passes = Math.round(8 * animWave01(params.animationPhase))
+  }
   const r = passes > 0 ? 1 : 0
   for (let p = 0; p < passes; p++) {
     const blurred = boxBlur(gray, cols, rows, r)
     gray.set(blurred)
   }
 
-  if (params.edgeEmphasis > 0.001) {
+  let edgeW = Math.max(0, Math.min(1, params.edgeEmphasis))
+  if (params.animationMode === 'edge') {
+    edgeW = animWave01(params.animationPhase)
+  }
+  if (edgeW > 0.001) {
     const edge = sobelMax(gray, cols, rows)
-    const w = Math.max(0, Math.min(1, params.edgeEmphasis))
+    const w = edgeW
     for (let i = 0; i < n; i++) {
       gray[i] = gray[i]! * (1 - w) + edge[i]! * w
     }
   }
 
-  const sharp = Math.max(0, Math.min(3, params.sharpenAmount))
+  let sharp = Math.max(0, Math.min(3, params.sharpenAmount))
+  if (params.animationMode === 'sharpen') {
+    sharp = 3 * animWave01(params.animationPhase)
+  }
   if (sharp > 0.001) {
     const soft = boxBlur(gray, cols, rows, 1)
     for (let i = 0; i < n; i++) {
@@ -402,6 +423,57 @@ export function escapeXml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+export interface SvgOverlayExportOptions {
+  /** Pre-rendered image data URL (already grayscaled at source if requested). */
+  imageDataUrl: string
+  width: number
+  height: number
+  useColor: boolean
+  grayscaleGlyphColor: string
+  /** Faint dark outline around glyphs for legibility (matches viewfinder text-shadow). */
+  glyphOutline?: string
+}
+
+/** Mirrors the in-app AsciiImageOverlay: image bottom layer, per-cell centred glyphs on top. */
+export function asciiOverlayToSvg(
+  result: AsciiResult,
+  opts: SvgOverlayExportOptions
+): string {
+  const {
+    imageDataUrl,
+    width: bw,
+    height: bh,
+    useColor,
+    grayscaleGlyphColor,
+    glyphOutline = 'rgba(0,0,0,0.35)',
+  } = opts
+
+  const cellW = bw / result.cols
+  const cellH = bh / result.rows
+  const fontSize = Math.max(2, Math.min(cellW / 0.62, cellH * 0.92))
+  const strokeWidth = Math.max(0.5, fontSize * 0.06)
+
+  const glyphs: string[] = []
+  for (let yi = 0; yi < result.lines.length; yi++) {
+    const row = result.lines[yi]!
+    const cy = (yi + 0.5) * cellH
+    for (let xi = 0; xi < row.length; xi++) {
+      const cell = row[xi]!
+      const cx = (xi + 0.5) * cellW
+      const color = useColor ? cell.color : grayscaleGlyphColor
+      glyphs.push(
+        `<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" fill="${escapeXml(color)}" stroke="${escapeXml(glyphOutline)}" stroke-width="${strokeWidth.toFixed(2)}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central" font-family="'Geist Mono', ui-monospace, Consolas, monospace" font-size="${fontSize.toFixed(2)}" font-weight="500">${escapeXml(cell.ch)}</text>`
+      )
+    }
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${bw}" height="${bh}" viewBox="0 0 ${bw} ${bh}">
+<image href="${imageDataUrl}" x="0" y="0" width="${bw}" height="${bh}" preserveAspectRatio="none"/>
+${glyphs.join('\n')}
+</svg>`
 }
 
 export function asciiResultToSvg(result: AsciiResult, opts: SvgExportOptions): string {

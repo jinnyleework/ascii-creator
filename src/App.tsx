@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import {
+  asciiOverlayToSvg,
   asciiResultToSvg,
   buildAscii,
   type AnimationMode,
@@ -16,7 +17,13 @@ import {
   type GrayscaleMode,
 } from './asciiPipeline'
 import { DEFAULT_CHARSET } from './charset'
-import { asciiResultToPngBlob } from './exportPng'
+import {
+  asciiOverlayToPngBlob,
+  asciiResultToPngBlob,
+  bitmapToPngDataUrl,
+} from './exportPng'
+import logoAsciiCreator from './assets/logo-ascii-creator.png'
+import horseAscii from './assets/horse-ascii.png'
 import './App.css'
 
 const CHARSET_PRESETS: { label: string; value: string }[] = [
@@ -26,16 +33,321 @@ const CHARSET_PRESETS: { label: string; value: string }[] = [
   { label: 'Minimal', value: ' .:oO8@' },
 ]
 
+const GRAYSCALE_MODES: GrayscaleMode[] = [
+  'luminance',
+  'average',
+  'lightness',
+  'red',
+  'green',
+  'blue',
+]
+
+const ANIM_MODES: AnimationMode[] = [
+  'hue',
+  'ramp',
+  'solarize',
+  'sharpen',
+  'edge',
+  'glow',
+]
+
+const PRIVACY_NOTE =
+  'Photos stay in your browser: we do not upload or store them. Remove background runs locally; only ML model files may download from the vendor CDN, not your image.'
+
+type PresetSettings = {
+  columns: number
+  charset: string
+  rampInvert: boolean
+  grayscaleMode: GrayscaleMode
+  imageInvert: boolean
+  solarizeEnabled: boolean
+  solarizeThreshold: number
+  blurPasses: number
+  sharpenAmount: number
+  edgeEmphasis: number
+  useColor: boolean
+  colorSaturationPct: number
+  animEnabled: boolean
+  animMode: AnimationMode
+  animSpeed: number
+  asciiBackground: string
+  grayscaleGlyphColor: string
+  overlayOnImage: boolean
+}
+
+type SettingsPreset = {
+  id: string
+  name: string
+  createdAt: number
+  settings: PresetSettings
+}
+
+/** Presets store only settings — never image data — so the privacy promise holds. */
+const PRESETS_STORAGE_KEY = 'ascii-creator:presets:v1'
+
+function isValidPreset(value: unknown): value is SettingsPreset {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  if (typeof v.id !== 'string' || typeof v.name !== 'string') return false
+  const s = v.settings as Record<string, unknown> | undefined
+  if (!s || typeof s !== 'object') return false
+  return (
+    typeof s.columns === 'number' &&
+    typeof s.charset === 'string' &&
+    typeof s.rampInvert === 'boolean' &&
+    GRAYSCALE_MODES.includes(s.grayscaleMode as GrayscaleMode) &&
+    typeof s.imageInvert === 'boolean' &&
+    typeof s.solarizeEnabled === 'boolean' &&
+    typeof s.solarizeThreshold === 'number' &&
+    typeof s.blurPasses === 'number' &&
+    typeof s.sharpenAmount === 'number' &&
+    typeof s.edgeEmphasis === 'number' &&
+    typeof s.useColor === 'boolean' &&
+    typeof s.colorSaturationPct === 'number' &&
+    typeof s.animEnabled === 'boolean' &&
+    ANIM_MODES.includes(s.animMode as AnimationMode) &&
+    typeof s.animSpeed === 'number' &&
+    typeof s.asciiBackground === 'string' &&
+    typeof s.grayscaleGlyphColor === 'string' &&
+    typeof s.overlayOnImage === 'boolean'
+  )
+}
+
+function loadPresets(): SettingsPreset[] {
+  try {
+    const raw = localStorage.getItem(PRESETS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isValidPreset)
+  } catch {
+    return []
+  }
+}
+
+function persistPresets(presets: SettingsPreset[]): void {
+  try {
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets))
+  } catch {
+    /* quota or storage disabled — preset is kept in-memory for this session only. */
+  }
+}
+
+function createPresetId(): string {
+  const c = globalThis.crypto as Crypto | undefined
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID()
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function randInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min
+}
+
+function randBool(): boolean {
+  return Math.random() < 0.5
+}
+
+function randHexColor(): string {
+  return `#${randInt(0, 0xffffff)
+    .toString(16)
+    .padStart(6, '0')}`
+}
+
+function parseHex6(hex: string): [number, number, number] | null {
+  const m = hex.trim().match(/^#?([0-9a-f]{6})$/i)
+  if (!m) return null
+  const n = parseInt(m[1]!, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function relativeLuminance(hex: string): number {
+  const t = parseHex6(hex)
+  if (!t) return 0.5
+  const lin = (c: number) => {
+    const x = c / 255
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4
+  }
+  const [r, g, b] = t
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+function contrastRatio(hexA: string, hexB: string): number {
+  const La = relativeLuminance(hexA)
+  const Lb = relativeLuminance(hexB)
+  const lighter = Math.max(La, Lb)
+  const darker = Math.min(La, Lb)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+/** WCAG-style contrast; retries until ratio is met (glyph vs stage background). */
+function randomContrastingBgAndGlyph(): { bg: string; glyph: string } {
+  const bg = randHexColor()
+  for (let i = 0; i < 72; i++) {
+    const glyph = randHexColor()
+    if (contrastRatio(bg, glyph) >= 4) return { bg, glyph }
+  }
+  const L = relativeLuminance(bg)
+  const glyph = L > 0.5 ? '#0a0a0a' : '#f5f5f5'
+  return { bg, glyph }
+}
+
+function randomCharsetString(): string {
+  if (Math.random() < 0.65) {
+    const p = CHARSET_PRESETS[randInt(0, CHARSET_PRESETS.length - 1)]!
+    return p.value
+  }
+  const pool = `${DEFAULT_CHARSET}░▒▓█ `
+  let s = ''
+  const len = randInt(4, 28)
+  for (let i = 0; i < len; i++) {
+    s += pool[randInt(0, pool.length - 1)]!
+  }
+  return s
+}
+
 function pct(value: number, min: number, max: number): number {
   if (max <= min) return 0
   return Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100))
 }
 
-function RailTip({ tip, children }: { tip: string; children: ReactNode }) {
+function clampNum(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n))
+}
+
+const APP_TIP_MAX = 240
+const APP_TIP_PAD = 12
+
+function clearAppTooltipPosition(el: HTMLElement): void {
+  delete el.dataset.tipPositioned
+  for (const p of [
+    '--app-tip-left',
+    '--app-tip-top',
+    '--app-tip-transform',
+    '--app-tip-text-align',
+    '--app-tip-max-h',
+  ] as const) {
+    el.style.removeProperty(p)
+  }
+}
+
+function scheduleTooltipClear(el: HTMLElement): void {
+  requestAnimationFrame(() => {
+    if (!el.matches(':focus-within') && !el.matches(':hover')) {
+      clearAppTooltipPosition(el)
+    }
+  })
+}
+
+function setAppTooltipPosition(el: HTMLElement, kind: 'rail' | 'info'): void {
+  const r = el.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const narrow = vw <= 960
+
+  if (kind === 'rail') {
+    if (narrow) {
+      const cx = clampNum(
+        r.left + r.width / 2,
+        APP_TIP_PAD + APP_TIP_MAX / 2,
+        vw - APP_TIP_PAD - APP_TIP_MAX / 2
+      )
+      const top = r.top - 10
+      el.style.setProperty('--app-tip-left', `${cx}px`)
+      el.style.setProperty('--app-tip-top', `${top}px`)
+      el.style.setProperty('--app-tip-transform', 'translate(-50%, -100%)')
+      el.style.setProperty('--app-tip-text-align', 'center')
+      el.style.setProperty(
+        '--app-tip-max-h',
+        `min(50vh, ${Math.max(80, r.top - APP_TIP_PAD - 4)}px)`
+      )
+    } else {
+      const cy = clampNum(r.top + r.height / 2, APP_TIP_PAD, vh - APP_TIP_PAD)
+      let anchorX = r.left - 10
+      const minAnchor = APP_TIP_PAD + APP_TIP_MAX
+      if (anchorX < minAnchor) anchorX = minAnchor
+      const maxAnchor = vw - APP_TIP_PAD
+      if (anchorX > maxAnchor) anchorX = maxAnchor
+      el.style.setProperty('--app-tip-left', `${anchorX}px`)
+      el.style.setProperty('--app-tip-top', `${cy}px`)
+      el.style.setProperty('--app-tip-transform', 'translate(-100%, -50%)')
+      el.style.setProperty('--app-tip-text-align', 'center')
+      el.style.setProperty(
+        '--app-tip-max-h',
+        `min(70vh, ${Math.max(120, cy - APP_TIP_PAD, vh - cy - APP_TIP_PAD)}px)`
+      )
+    }
+  } else if (narrow) {
+    const cx = clampNum(
+      r.left + r.width / 2,
+      APP_TIP_PAD + APP_TIP_MAX / 2,
+      vw - APP_TIP_PAD - APP_TIP_MAX / 2
+    )
+    const top = r.bottom + 10
+    el.style.setProperty('--app-tip-left', `${cx}px`)
+    el.style.setProperty('--app-tip-top', `${top}px`)
+    el.style.setProperty('--app-tip-transform', 'translate(-50%, 0)')
+    el.style.setProperty('--app-tip-text-align', 'left')
+    el.style.setProperty(
+      '--app-tip-max-h',
+      `min(50vh, ${Math.max(80, vh - top - APP_TIP_PAD)}px)`
+    )
+  } else {
+    let left = r.right + 10
+    left = clampNum(left, APP_TIP_PAD, vw - APP_TIP_PAD - APP_TIP_MAX)
+    const cy = clampNum(r.top + r.height / 2, APP_TIP_PAD, vh - APP_TIP_PAD)
+    el.style.setProperty('--app-tip-left', `${left}px`)
+    el.style.setProperty('--app-tip-top', `${cy}px`)
+    el.style.setProperty('--app-tip-transform', 'translateY(-50%)')
+    el.style.setProperty('--app-tip-text-align', 'left')
+    el.style.setProperty(
+      '--app-tip-max-h',
+      `min(70vh, ${Math.max(120, cy - APP_TIP_PAD, vh - cy - APP_TIP_PAD)}px)`
+    )
+  }
+
+  el.dataset.tipPositioned = '1'
+}
+
+function TooltipSpan({
+  kind,
+  tip,
+  className,
+  children,
+}: {
+  kind: 'rail' | 'info'
+  tip: string
+  className: string
+  children: ReactNode
+}) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const update = useCallback(() => {
+    const el = ref.current
+    if (el) setAppTooltipPosition(el, kind)
+  }, [kind])
+  const clear = useCallback(() => {
+    const el = ref.current
+    if (el) scheduleTooltipClear(el)
+  }, [])
   return (
-    <span className="rail-tip" data-tooltip={tip}>
+    <span
+      ref={ref}
+      className={className}
+      data-tooltip={tip}
+      onPointerEnter={update}
+      onPointerLeave={clear}
+      onFocusCapture={update}
+      onBlurCapture={clear}
+    >
       {children}
     </span>
+  )
+}
+
+function RailTip({ tip, children }: { tip: string; children: ReactNode }) {
+  return (
+    <TooltipSpan kind="rail" tip={tip} className="rail-tip">
+      {children}
+    </TooltipSpan>
   )
 }
 
@@ -123,6 +435,71 @@ function AsciiViewportFit({
   )
 }
 
+/** Matches SVG export horizontal spacing so glyphs align with pipeline columns. */
+const OVERLAY_GLYPH_ADVANCE_EM = 0.62
+
+function AsciiImageOverlay({
+  bitmap,
+  previewUrl,
+  asciiResult,
+  useColor,
+  grayscaleGlyphColor,
+  photoGrayscale,
+}: {
+  bitmap: ImageBitmap
+  previewUrl: string
+  asciiResult: AsciiResult
+  useColor: boolean
+  grayscaleGlyphColor: string
+  photoGrayscale: boolean
+}) {
+  const bw = bitmap.width
+  const bh = bitmap.height
+  const { cols, rows, lines } = asciiResult
+  const cellW = bw / cols
+  const cellH = bh / rows
+  const fontSize = Math.max(
+    2,
+    Math.min(cellW / OVERLAY_GLYPH_ADVANCE_EM, cellH * 0.92)
+  )
+
+  return (
+    <div className="ascii-overlay" style={{ width: bw, height: bh }}>
+      <img
+        className={`ascii-overlay__img${photoGrayscale ? ' ascii-overlay__img--bw' : ''}`}
+        src={previewUrl}
+        alt=""
+        width={bw}
+        height={bh}
+        draggable={false}
+      />
+      <div
+        className="ascii-overlay__glyphs"
+        style={{
+          gridTemplateColumns: `repeat(${cols}, 1fr)`,
+          gridTemplateRows: `repeat(${rows}, 1fr)`,
+          fontSize,
+          lineHeight: `${cellH}px`,
+        }}
+      >
+        {lines.map((row, yi) =>
+          row.map((cell, xi) => (
+            <span
+              key={`${yi}-${xi}`}
+              className="ascii-overlay__cell"
+              style={{
+                color: useColor ? cell.color : grayscaleGlyphColor,
+              }}
+            >
+              {cell.ch}
+            </span>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 function useImageBitmap(file: File | null) {
   const [bitmap, setBitmap] = useState<ImageBitmap | null>(null)
 
@@ -160,48 +537,85 @@ function useImageBitmap(file: File | null) {
   return bitmap
 }
 
-function LogoMark() {
+function SidebarBrand({ onLogoClick }: { onLogoClick: () => void }) {
+  const [spinning, setSpinning] = useState(false)
+
+  const handleLogoClick = () => {
+    setSpinning(true)
+    onLogoClick()
+  }
+
   return (
-    <svg
-      className="logo-mark"
-      width="33"
-      height="36"
-      viewBox="0 0 33 36"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden
-    >
-      <path
-        opacity="0.9"
-        d="M16.5 2L20.2 12.4H31.4L22.7 18.4L26.4 28.8L16.5 22.8L6.6 28.8L10.3 18.4L1.6 12.4H12.8L16.5 2Z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="16.5" cy="14" r="3" fill="currentColor" />
-    </svg>
+    <div className="sidebar-brand">
+      <div className="sidebar-brand-logo-wrap">
+        <button
+          type="button"
+          className={`sidebar-brand-logo-btn${spinning ? ' is-spinning' : ''}`}
+          onClick={handleLogoClick}
+          onAnimationEnd={() => setSpinning(false)}
+          aria-label="Randomise all settings"
+        >
+          <img
+            className="sidebar-brand-logo"
+            src={logoAsciiCreator}
+            alt=""
+            width={33}
+            height={36}
+            decoding="async"
+          />
+        </button>
+      </div>
+      <div className="sidebar-brand-text">
+        <div className="sidebar-brand-headline">
+          <TooltipSpan
+            kind="info"
+            tip={PRIVACY_NOTE}
+            className="info-tip-wrap privacy-tip-wrap"
+          >
+            <span className="privacy-headline-inner">
+              <p className="sidebar-brand-title">ascii creator</p>
+              <button
+                type="button"
+                className="info-btn"
+                aria-label={PRIVACY_NOTE}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M12 3 5 6v5.5C5 16 8.5 19.5 12 21c3.5-1.5 7-5 7-9.5V6l-7-3Z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </span>
+          </TooltipSpan>
+        </div>
+        <p className="sidebar-brand-sub">by jinny lee</p>
+      </div>
+    </div>
   )
 }
 
 function InfoTip({ label }: { label: string }) {
   return (
-    <button
-      type="button"
-      className="info-btn"
-      title={label}
-      aria-label={label}
-      tabIndex={-1}
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
-        <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
-        <path
-          d="M12 10v6M12 7.5h.01"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-      </svg>
-    </button>
+    <TooltipSpan kind="info" tip={label} className="info-tip-wrap">
+      <button
+        type="button"
+        className="info-btn"
+        aria-label={label}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
+          <path
+            d="M12 10v6M12 7.5h.01"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </svg>
+      </button>
+    </TooltipSpan>
   )
 }
 
@@ -262,15 +676,29 @@ export default function App() {
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'err'>('idle')
   const [asciiBackground, setAsciiBackground] = useState('#ffffff')
   const [grayscaleGlyphColor, setGrayscaleGlyphColor] = useState('#0a0a0a')
+  const [overlayOnImage, setOverlayOnImage] = useState(false)
+  const [overlayPhotoGrayscale, setOverlayPhotoGrayscale] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  const [presetsOpen, setPresetsOpen] = useState(false)
+  const [presets, setPresets] = useState<SettingsPreset[]>(() => loadPresets())
+  const [newPresetName, setNewPresetName] = useState('')
+  const [presetSavedFlash, setPresetSavedFlash] = useState(false)
   const [bgRemoveBusy, setBgRemoveBusy] = useState(false)
   const [bgRemoveError, setBgRemoveError] = useState<string | null>(null)
+  /** Processed image used only for ASCII; original `file` stays for preview / overlay. */
+  const [nobgFile, setNobgFile] = useState<File | null>(null)
 
   const fileRef = useRef<HTMLInputElement>(null)
+  const charsetTextareaRef = useRef<HTMLTextAreaElement>(null)
   const exportRef = useRef<HTMLDivElement>(null)
+  const presetsRef = useRef<HTMLDivElement>(null)
+  const presetNameInputRef = useRef<HTMLInputElement>(null)
   const railGradId = useId().replace(/:/g, '')
 
-  const bitmap = useImageBitmap(file)
+  const sourceBitmap = useImageBitmap(file)
+  const nobgBitmap = useImageBitmap(nobgFile)
+  const nobgReady = nobgFile != null && nobgBitmap != null
+  const asciiBitmap = nobgReady ? nobgBitmap : sourceBitmap
 
   const previewUrlRef = useRef<string | null>(null)
   useEffect(() => {
@@ -306,7 +734,37 @@ export default function App() {
     return () => document.removeEventListener('mousedown', close)
   }, [exportOpen])
 
-  const animActive = animEnabled && !!bitmap
+  useEffect(() => {
+    if (!presetsOpen) return
+    const close = (e: MouseEvent) => {
+      if (
+        presetsRef.current &&
+        !presetsRef.current.contains(e.target as Node)
+      ) {
+        setPresetsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [presetsOpen])
+
+  useEffect(() => {
+    persistPresets(presets)
+  }, [presets])
+
+  useEffect(() => {
+    if (!solarizeEnabled && animMode === 'solarize') {
+      setAnimMode('hue')
+    }
+  }, [solarizeEnabled, animMode])
+
+  useEffect(() => {
+    if (!presetsOpen) return
+    const id = requestAnimationFrame(() => presetNameInputRef.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [presetsOpen])
+
+  const animActive = animEnabled && !!sourceBitmap
   const lastAnimTick = useRef(0)
   const animFrame = useRef(0)
 
@@ -331,9 +789,12 @@ export default function App() {
     }
   }, [animActive, animSpeed])
 
+  const resolvedAnimMode: AnimationMode =
+    !solarizeEnabled && animMode === 'solarize' ? 'hue' : animMode
+
   const asciiResult: AsciiResult | null = useMemo(() => {
-    if (!bitmap) return null
-    return buildAscii(bitmap, bitmap.width, bitmap.height, {
+    if (!asciiBitmap) return null
+    return buildAscii(asciiBitmap, asciiBitmap.width, asciiBitmap.height, {
       columns,
       charset,
       rampInvert,
@@ -348,10 +809,10 @@ export default function App() {
       grayscaleGlyphHex: grayscaleGlyphColor,
       colorSaturation: useColor ? colorSaturationPct / 100 : 1,
       animationPhase: phase,
-      animationMode: animEnabled ? animMode : null,
+      animationMode: animEnabled ? resolvedAnimMode : null,
     })
   }, [
-    bitmap,
+    asciiBitmap,
     columns,
     charset,
     rampInvert,
@@ -367,11 +828,11 @@ export default function App() {
     colorSaturationPct,
     phase,
     animEnabled,
-    animMode,
+    resolvedAnimMode,
   ])
 
   const plainText = asciiResult?.plainText ?? ''
-  const disabled = !bitmap
+  const disabled = !sourceBitmap
 
   const asciiFitRevision = useMemo(
     () =>
@@ -382,6 +843,10 @@ export default function App() {
         columns,
         useColor ? 1 : 0,
         charset,
+        overlayOnImage ? 1 : 0,
+        asciiBitmap?.width ?? 0,
+        asciiBitmap?.height ?? 0,
+        nobgReady ? 1 : 0,
       ].join('\u001e'),
     [
       asciiResult?.cols,
@@ -390,6 +855,10 @@ export default function App() {
       columns,
       useColor,
       charset,
+      overlayOnImage,
+      asciiBitmap?.width,
+      asciiBitmap?.height,
+      nobgReady,
     ]
   )
 
@@ -400,6 +869,8 @@ export default function App() {
 
   const onFile = useCallback((f: File | null) => {
     setFile(f)
+    setNobgFile(null)
+    setOverlayPhotoGrayscale(false)
     setCopyState('idle')
     setBgRemoveError(null)
   }, [])
@@ -444,38 +915,75 @@ export default function App() {
   const downloadSvg = useCallback(
     (animated: boolean) => {
       if (!asciiResult) return
-      const svg = asciiResultToSvg(asciiResult, {
-        fontSize: 10,
-        lineHeight: 11,
-        charAdvanceEm: 0.62,
-        background: asciiBackground,
-        animated,
-      })
+      const overlayActive =
+        overlayOnImage && !animated && sourceBitmap != null
+      let svg: string
+      let suffix = ''
+      if (overlayActive && sourceBitmap) {
+        const imageDataUrl = bitmapToPngDataUrl(sourceBitmap, overlayPhotoGrayscale)
+        if (!imageDataUrl) return
+        svg = asciiOverlayToSvg(asciiResult, {
+          imageDataUrl,
+          width: sourceBitmap.width,
+          height: sourceBitmap.height,
+          useColor,
+          grayscaleGlyphColor,
+        })
+        suffix = '-overlay'
+      } else {
+        svg = asciiResultToSvg(asciiResult, {
+          fontSize: 10,
+          lineHeight: 11,
+          charAdvanceEm: 0.62,
+          background: asciiBackground,
+          animated,
+        })
+        suffix = animated ? '-animated' : ''
+      }
       const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
       a.download =
-        (file?.name.replace(/\.[^.]+$/, '') ?? 'ascii') +
-        (animated ? '-animated' : '') +
-        '.svg'
+        (file?.name.replace(/\.[^.]+$/, '') ?? 'ascii') + suffix + '.svg'
       a.click()
       URL.revokeObjectURL(a.href)
       setExportOpen(false)
     },
-    [asciiResult, asciiBackground, file?.name]
+    [
+      asciiResult,
+      asciiBackground,
+      file?.name,
+      overlayOnImage,
+      sourceBitmap,
+      overlayPhotoGrayscale,
+      useColor,
+      grayscaleGlyphColor,
+    ]
   )
 
   const downloadPng = useCallback(async () => {
     if (!asciiResult?.plainText) return
-    const blob = await asciiResultToPngBlob(asciiResult, {
-      background: asciiBackground,
-      fontSize: 14,
-      pixelRatio: 2,
-    })
+    const overlayActive = overlayOnImage && sourceBitmap != null
+    const blob = overlayActive && sourceBitmap
+      ? await asciiOverlayToPngBlob(asciiResult, {
+          bitmap: sourceBitmap,
+          useColor,
+          grayscaleGlyphColor,
+          photoGrayscale: overlayPhotoGrayscale,
+          pixelRatio: 2,
+        })
+      : await asciiResultToPngBlob(asciiResult, {
+          background: asciiBackground,
+          fontSize: 14,
+          pixelRatio: 2,
+        })
     if (!blob) return
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = (file?.name.replace(/\.[^.]+$/, '') ?? 'ascii') + '.png'
+    a.download =
+      (file?.name.replace(/\.[^.]+$/, '') ?? 'ascii') +
+      (overlayActive ? '-overlay' : '') +
+      '.png'
     a.click()
     URL.revokeObjectURL(a.href)
     setExportOpen(false)
@@ -483,6 +991,11 @@ export default function App() {
     asciiResult,
     asciiBackground,
     file?.name,
+    overlayOnImage,
+    sourceBitmap,
+    overlayPhotoGrayscale,
+    useColor,
+    grayscaleGlyphColor,
   ])
 
   const removeImageBackground = useCallback(async () => {
@@ -490,13 +1003,15 @@ export default function App() {
     setBgRemoveError(null)
     setBgRemoveBusy(true)
     try {
+      // @imgly/background-removal runs entirely in the browser; the image is not uploaded.
+      // Network requests (if any) fetch wasm/ONNX weights from the configured publicPath only.
       const { removeBackground } = await import('@imgly/background-removal')
       const blob = await removeBackground(file, {
         model: 'isnet_quint8',
         output: { format: 'image/png' },
       })
       const stem = file.name.replace(/\.[^.]+$/, '') || 'image'
-      onFile(
+      setNobgFile(
         new File([blob], `${stem}-nobg.png`, {
           type: 'image/png',
           lastModified: Date.now(),
@@ -509,12 +1024,126 @@ export default function App() {
     } finally {
       setBgRemoveBusy(false)
     }
-  }, [file, bgRemoveBusy, onFile])
+  }, [file, bgRemoveBusy])
+
+  const captureCurrentSettings = useCallback(
+    (): PresetSettings => ({
+      columns,
+      charset,
+      rampInvert,
+      grayscaleMode,
+      imageInvert,
+      solarizeEnabled,
+      solarizeThreshold,
+      blurPasses,
+      sharpenAmount,
+      edgeEmphasis,
+      useColor,
+      colorSaturationPct,
+      animEnabled,
+      animMode,
+      animSpeed,
+      asciiBackground,
+      grayscaleGlyphColor,
+      overlayOnImage,
+    }),
+    [
+      columns,
+      charset,
+      rampInvert,
+      grayscaleMode,
+      imageInvert,
+      solarizeEnabled,
+      solarizeThreshold,
+      blurPasses,
+      sharpenAmount,
+      edgeEmphasis,
+      useColor,
+      colorSaturationPct,
+      animEnabled,
+      animMode,
+      animSpeed,
+      asciiBackground,
+      grayscaleGlyphColor,
+      overlayOnImage,
+    ]
+  )
+
+  const saveCurrentAsPreset = useCallback(() => {
+    const trimmed = newPresetName.trim()
+    const fallback = `Preset ${presets.length + 1}`
+    const preset: SettingsPreset = {
+      id: createPresetId(),
+      name: (trimmed || fallback).slice(0, 60),
+      createdAt: Date.now(),
+      settings: captureCurrentSettings(),
+    }
+    setPresets((prev) => [preset, ...prev])
+    setNewPresetName('')
+    setPresetSavedFlash(true)
+    window.setTimeout(() => setPresetSavedFlash(false), 1400)
+  }, [newPresetName, presets.length, captureCurrentSettings])
+
+  const applyPreset = useCallback((preset: SettingsPreset) => {
+    const s = preset.settings
+    setColumns(s.columns)
+    setCharset(s.charset)
+    setRampInvert(s.rampInvert)
+    setGrayscaleMode(s.grayscaleMode)
+    setImageInvert(s.imageInvert)
+    setSolarizeEnabled(s.solarizeEnabled)
+    setSolarizeThreshold(s.solarizeThreshold)
+    setBlurPasses(s.blurPasses)
+    setSharpenAmount(s.sharpenAmount)
+    setEdgeEmphasis(s.edgeEmphasis)
+    setUseColor(s.useColor)
+    setColorSaturationPct(s.colorSaturationPct)
+    setAnimEnabled(s.animEnabled)
+    setAnimMode(s.animMode)
+    setAnimSpeed(s.animSpeed)
+    setAsciiBackground(s.asciiBackground)
+    setGrayscaleGlyphColor(s.grayscaleGlyphColor)
+    setOverlayOnImage(s.overlayOnImage)
+    setPresetsOpen(false)
+  }, [])
+
+  const deletePreset = useCallback((id: string) => {
+    setPresets((prev) => prev.filter((p) => p.id !== id))
+  }, [])
+
+  const randomizeSettings = useCallback(() => {
+    setExportOpen(false)
+    setCopyState('idle')
+    setNobgFile(null)
+    setOverlayPhotoGrayscale(randBool())
+    setColumns(randInt(40, 500))
+    setCharset(randomCharsetString())
+    setRampInvert(randBool())
+    setGrayscaleMode(GRAYSCALE_MODES[randInt(0, GRAYSCALE_MODES.length - 1)]!)
+    setImageInvert(randBool())
+    setSolarizeEnabled(randBool())
+    setSolarizeThreshold(randInt(0, 255))
+    setBlurPasses(randInt(0, 8))
+    setSharpenAmount(randInt(0, 300) / 100)
+    setEdgeEmphasis(randInt(0, 100) / 100)
+    setUseColor(randBool())
+    setColorSaturationPct(randInt(100, 250))
+    setAnimEnabled(randBool())
+    setAnimMode(ANIM_MODES[randInt(0, ANIM_MODES.length - 1)]!)
+    setAnimSpeed(randInt(20, 300) / 100)
+    const { bg, glyph } = randomContrastingBgAndGlyph()
+    setAsciiBackground(bg)
+    setGrayscaleGlyphColor(glyph)
+    setOverlayOnImage(randBool())
+  }, [])
 
   const animModeLabel: Record<AnimationMode, string> = {
     hue: 'hue drift',
     ramp: 'ramp drift',
     solarize: 'solarize sweep',
+    sharpen: 'sharpen pulse',
+    edge: 'edge emphasis pulse',
+    glow: 'glow pulse',
   }
 
   const grayscaleLabel: Record<GrayscaleMode, string> = {
@@ -539,27 +1168,33 @@ export default function App() {
 
       <aside className="sidebar">
         <div className="sidebar-top">
-          <LogoMark />
-          {bitmap && previewUrl && (
+          <SidebarBrand onLogoClick={randomizeSettings} />
+          {sourceBitmap && previewUrl && (
             <>
-              <div className="thumb-row">
-                <img src={previewUrl} alt="" width={48} height={48} />
-                <button
-                  type="button"
-                  className="link-btn"
-                  onClick={() => fileRef.current?.click()}
-                >
-                  Replace image
-                </button>
+              <div className="sidebar-image-block">
+                <div className="sidebar-thumb">
+                  <img src={previewUrl} alt="" />
+                </div>
+                <div className="sidebar-image-actions">
+                  <button
+                    type="button"
+                    className="sidebar-chip-btn"
+                    aria-label="Replace image"
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar-chip-btn"
+                    aria-label="Remove background for ASCII only (original photo unchanged). Processing stays in your browser."
+                    disabled={!file || bgRemoveBusy}
+                    onClick={() => void removeImageBackground()}
+                  >
+                    {bgRemoveBusy ? 'Removing…' : 'Remove background'}
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                className="sidebar-action"
-                disabled={!file || bgRemoveBusy}
-                onClick={() => void removeImageBackground()}
-              >
-                {bgRemoveBusy ? 'Removing background…' : 'Remove background'}
-              </button>
               {bgRemoveError && (
                 <p className="sidebar-action-error" role="alert">
                   {bgRemoveError}
@@ -580,6 +1215,30 @@ export default function App() {
               onChange={setColumns}
               disabled={disabled}
             />
+            <label className="rich-check">
+              <input
+                type="checkbox"
+                checked={overlayOnImage}
+                disabled={disabled}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  setOverlayOnImage(on)
+                  if (!on) setOverlayPhotoGrayscale(false)
+                }}
+              />
+              <span>overlay on image</span>
+              <InfoTip label="Draws the ASCII grid on top of your source image in the preview. Each character lines up with the same pixels the converter samples." />
+            </label>
+            <label className="rich-check">
+              <input
+                type="checkbox"
+                checked={overlayPhotoGrayscale}
+                disabled={disabled || !overlayOnImage}
+                onChange={(e) => setOverlayPhotoGrayscale(e.target.checked)}
+              />
+              <span>{'B&W underlay'}</span>
+              <InfoTip label="When overlay is on, shows the photo in greyscale under the ASCII so glyphs stand out more." />
+            </label>
           </div>
 
           <div className="section section--pad-y">
@@ -595,7 +1254,13 @@ export default function App() {
                 disabled={disabled}
                 onChange={(e) => {
                   const v = e.target.value
-                  if (v === 'Custom') return
+                  if (v === 'Custom') {
+                    setCharset('')
+                    requestAnimationFrame(() =>
+                      charsetTextareaRef.current?.focus()
+                    )
+                    return
+                  }
                   const p = CHARSET_PRESETS.find((x) => x.label === v)
                   if (p) setCharset(p.value)
                 }}
@@ -609,11 +1274,12 @@ export default function App() {
               </select>
             </div>
             <textarea
+              ref={charsetTextareaRef}
               className="textarea"
               rows={3}
               value={charset}
               onChange={(e) => setCharset(e.target.value)}
-              placeholder="Custom character ramp…"
+              placeholder="Type your ramp, one character at a time…"
               spellCheck={false}
               disabled={disabled}
             />
@@ -625,7 +1291,7 @@ export default function App() {
                 onChange={(e) => setRampInvert(e.target.checked)}
               />
               <span>invert ramp</span>
-              <InfoTip label="Swaps light and dark glyphs on the character ramp" />
+              <InfoTip label="Reverses how your character ramp is applied: bright areas use dark glyphs and dark areas use light glyphs." />
             </label>
           </div>
 
@@ -657,17 +1323,21 @@ export default function App() {
                 onChange={(e) => setImageInvert(e.target.checked)}
               />
               <span>invert image</span>
-              <InfoTip label="Inverts luminance before blur, edges, and solarize" />
+              <InfoTip label="Flips the source image brightness (like a negative) before glow, edge emphasis, and solarise run, so light and dark are swapped at the source." />
             </label>
             <label className="rich-check">
               <input
                 type="checkbox"
                 checked={solarizeEnabled}
                 disabled={disabled}
-                onChange={(e) => setSolarizeEnabled(e.target.checked)}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  setSolarizeEnabled(on)
+                  if (!on && animMode === 'solarize') setAnimMode('hue')
+                }}
               />
               <span>solarise</span>
-              <InfoTip label="Inverts tones above the threshold (Sabattier-style)" />
+              <InfoTip label="Splits tones at a threshold: pixels brighter than it flip to their opposite value (Sabattier-style). Use the threshold slider to move where that split happens." />
             </label>
             {solarizeEnabled && (
               <RangeRow
@@ -696,7 +1366,7 @@ export default function App() {
 
           <div className="section section--pad-y">
             <RangeRow
-              label="blur passes"
+              label="glow"
               valueLabel={String(blurPasses)}
               min={0}
               max={8}
@@ -743,13 +1413,15 @@ export default function App() {
             </div>
             <select
               className="select"
-              value={animMode}
+              value={animEnabled ? resolvedAnimMode : animMode}
               disabled={disabled || !animEnabled}
               onChange={(e) =>
                 setAnimMode(e.target.value as AnimationMode)
               }
             >
-              {(Object.keys(animModeLabel) as AnimationMode[]).map((k) => (
+              {ANIM_MODES.filter(
+                (m) => m !== 'solarize' || solarizeEnabled
+              ).map((k) => (
                 <option key={k} value={k}>
                   {animModeLabel[k]}
                 </option>
@@ -774,15 +1446,21 @@ export default function App() {
         onDrop={onDrop}
       >
         <div className="workspace-inner">
-          {!bitmap ? (
+          {!sourceBitmap ? (
             <button
               type="button"
               className="drop-hero"
               onClick={() => fileRef.current?.click()}
             >
               <div className="drop-hero-inner">
-                <p className="drop-hero-title">Drop an image here</p>
-                <p className="drop-hero-hint">or click to choose a file</p>
+                <img
+                  className="drop-hero-art"
+                  src={horseAscii}
+                  alt=""
+                  aria-hidden
+                  draggable={false}
+                />
+                <p className="drop-hero-caption">drop or upload image</p>
               </div>
             </button>
           ) : (
@@ -797,7 +1475,16 @@ export default function App() {
                 key={asciiFitRevision}
                 revision={asciiFitRevision}
               >
-                {useColor && asciiResult ? (
+                {overlayOnImage && previewUrl && asciiResult && sourceBitmap ? (
+                  <AsciiImageOverlay
+                    bitmap={sourceBitmap}
+                    previewUrl={previewUrl}
+                    asciiResult={asciiResult}
+                    useColor={useColor}
+                    grayscaleGlyphColor={grayscaleGlyphColor}
+                    photoGrayscale={overlayPhotoGrayscale}
+                  />
+                ) : useColor && asciiResult ? (
                   <div className="ascii ascii--color" aria-live="polite">
                     {asciiResult.lines.map((row, yi) => (
                       <div className="ascii-line" key={yi}>
@@ -849,7 +1536,7 @@ export default function App() {
                   : 'Use colour ASCII'
               }
               aria-pressed={useColor}
-              disabled={!bitmap}
+              disabled={!sourceBitmap}
               onClick={() => setUseColor((v) => !v)}
             >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -916,6 +1603,95 @@ export default function App() {
             </label>
           </RailTip>
 
+          <div className="rail-pop" ref={presetsRef}>
+            <RailTip tip="Presets">
+              <button
+                type="button"
+                className="icon-btn"
+                aria-expanded={presetsOpen}
+                aria-haspopup="true"
+                aria-label="Save and apply settings presets"
+                onClick={() => setPresetsOpen((o) => !o)}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M6.5 3.75h11a1 1 0 0 1 1 1V20a.5.5 0 0 1-.79.41L12 16.5l-5.71 3.91A.5.5 0 0 1 5.5 20V4.75a1 1 0 0 1 1-1Z"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </RailTip>
+            {presetsOpen && (
+              <div className="rail-menu rail-menu--presets" role="dialog" aria-label="Presets">
+                <form
+                  className="presets-save"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    saveCurrentAsPreset()
+                  }}
+                >
+                  <input
+                    ref={presetNameInputRef}
+                    type="text"
+                    className="presets-input"
+                    placeholder="Name this preset"
+                    maxLength={60}
+                    value={newPresetName}
+                    onChange={(e) => setNewPresetName(e.target.value)}
+                    aria-label="Preset name"
+                  />
+                  <button
+                    type="submit"
+                    className="presets-save-btn"
+                    aria-label="Save current settings as a preset"
+                  >
+                    {presetSavedFlash ? 'Saved' : 'Save'}
+                  </button>
+                </form>
+                <p className="presets-hint">
+                  Stored locally in your browser. Image is not saved.
+                </p>
+                <div className="presets-divider" role="presentation" />
+                {presets.length === 0 ? (
+                  <p className="presets-empty">No presets yet.</p>
+                ) : (
+                  <ul className="presets-list" role="list">
+                    {presets.map((p) => (
+                      <li key={p.id} className="presets-row">
+                        <button
+                          type="button"
+                          className="presets-apply"
+                          onClick={() => applyPreset(p)}
+                          title="Apply this preset"
+                        >
+                          <span className="presets-row-name">{p.name}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="presets-delete"
+                          onClick={() => deletePreset(p.id)}
+                          aria-label={`Delete preset ${p.name}`}
+                          title="Delete preset"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                            <path
+                              d="M6 6l12 12M18 6L6 18"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="export-pop" ref={exportRef}>
             <RailTip tip="Export">
               <button
@@ -977,8 +1753,13 @@ export default function App() {
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={!asciiResult?.plainText}
+                  disabled={!asciiResult?.plainText || overlayOnImage}
                   onClick={() => downloadSvg(true)}
+                  title={
+                    overlayOnImage
+                      ? 'Turn off overlay on image to export an animated SVG'
+                      : undefined
+                  }
                 >
                   Download SVG (animated)
                 </button>
