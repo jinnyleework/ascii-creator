@@ -307,14 +307,22 @@
   position: relative;
 }
 
-.select {
+.combobox {
+  position: relative;
   width: 100%;
+}
+
+.select {
+  display: block;
+  width: 100%;
+  text-align: left;
   min-height: 32px;
   padding: 4px 32px 4px 10px;
   border: none;
   border-radius: var(--radius-lg);
   background: var(--secondary);
   color: var(--muted);
+  font: inherit;
   font-size: 14px;
   line-height: 20px;
   cursor: pointer;
@@ -322,6 +330,59 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23737373' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
+}
+
+.combobox-value {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combobox-menu {
+  position: fixed;
+  z-index: 2147482000;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  outline: none;
+}
+
+.combobox-menu[data-open-up='1'] {
+  transform: translateY(-100%);
+}
+
+.combobox-item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--foreground);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.combobox-item.is-active {
+  background: var(--secondary);
+}
+
+.combobox-item.is-selected {
+  color: var(--foreground);
+  font-weight: 500;
 }
 
 .select:focus {

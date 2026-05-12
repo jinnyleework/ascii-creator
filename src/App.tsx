@@ -294,15 +294,33 @@ function setAppTooltipPosition(el: HTMLElement, kind: 'rail' | 'info'): void {
   } else {
     let left = r.right + 10
     left = clampNum(left, APP_TIP_PAD, vw - APP_TIP_PAD - APP_TIP_MAX)
-    const cy = clampNum(r.top + r.height / 2, APP_TIP_PAD, vh - APP_TIP_PAD)
+    const anchorMidY = r.top + r.height / 2
+    /** Half of a typical tall tip; avoids translateY(-50%) clipping off the top/bottom. */
+    const estHalfTip = 88
+    const roomAbove = anchorMidY - APP_TIP_PAD
+    const roomBelow = vh - anchorMidY - APP_TIP_PAD
+    let top: number
+    let transform: string
+    let maxHExpr: string
+    if (roomAbove < estHalfTip && roomBelow >= roomAbove) {
+      top = r.bottom + 10
+      transform = 'translateY(0)'
+      maxHExpr = `min(70vh, ${Math.max(80, vh - top - APP_TIP_PAD)}px)`
+    } else if (roomBelow < estHalfTip && roomAbove > roomBelow) {
+      top = r.top - 10
+      transform = 'translateY(-100%)'
+      maxHExpr = `min(70vh, ${Math.max(80, top - APP_TIP_PAD)}px)`
+    } else {
+      const cy = clampNum(anchorMidY, APP_TIP_PAD, vh - APP_TIP_PAD)
+      top = cy
+      transform = 'translateY(-50%)'
+      maxHExpr = `min(70vh, ${Math.max(120, cy - APP_TIP_PAD, vh - cy - APP_TIP_PAD)}px)`
+    }
     el.style.setProperty('--app-tip-left', `${left}px`)
-    el.style.setProperty('--app-tip-top', `${cy}px`)
-    el.style.setProperty('--app-tip-transform', 'translateY(-50%)')
+    el.style.setProperty('--app-tip-top', `${top}px`)
+    el.style.setProperty('--app-tip-transform', transform)
     el.style.setProperty('--app-tip-text-align', 'left')
-    el.style.setProperty(
-      '--app-tip-max-h',
-      `min(70vh, ${Math.max(120, cy - APP_TIP_PAD, vh - cy - APP_TIP_PAD)}px)`
-    )
+    el.style.setProperty('--app-tip-max-h', maxHExpr)
   }
 
   el.dataset.tipPositioned = '1'
@@ -348,6 +366,212 @@ function RailTip({ tip, children }: { tip: string; children: ReactNode }) {
     <TooltipSpan kind="rail" tip={tip} className="rail-tip">
       {children}
     </TooltipSpan>
+  )
+}
+
+type ComboboxOption<T extends string> = { value: T; label: string }
+
+/**
+ * Custom dropdown that mirrors the .select look but renders its menu as a
+ * fixed-position popover anchored to the trigger. Avoids the native <select>
+ * popover from overlaying / "cutting" adjacent rich-check rows.
+ */
+function Combobox<T extends string>({
+  value,
+  options,
+  onChange,
+  disabled,
+  ariaLabel,
+}: {
+  value: T
+  options: ComboboxOption<T>[]
+  onChange: (next: T) => void
+  disabled?: boolean
+  ariaLabel?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ left: number; top: number; width: number }>({
+    left: 0,
+    top: 0,
+    width: 0,
+  })
+  const [maxH, setMaxH] = useState(280)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  const itemsRef = useRef<(HTMLButtonElement | null)[]>([])
+  const selected = options.find((o) => o.value === value) ?? options[0]
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((o) => o.value === value)
+  )
+
+  const updatePosition = useCallback(() => {
+    const t = triggerRef.current
+    if (!t) return
+    const r = t.getBoundingClientRect()
+    const vh = window.innerHeight
+    const spaceBelow = vh - r.bottom - 12
+    const spaceAbove = r.top - 12
+    const openUp = spaceBelow < 160 && spaceAbove > spaceBelow
+    const m = Math.max(120, Math.min(280, openUp ? spaceAbove : spaceBelow))
+    setPos({
+      left: r.left,
+      top: openUp ? r.top - 6 : r.bottom + 6,
+      width: r.width,
+    })
+    setMaxH(m)
+    if (openUp) {
+      popoverRef.current?.setAttribute('data-open-up', '1')
+    } else {
+      popoverRef.current?.removeAttribute('data-open-up')
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) return
+    updatePosition()
+    setActiveIndex(selectedIndex)
+  }, [open, selectedIndex, updatePosition])
+
+  useEffect(() => {
+    if (!open) return
+    const onScroll = () => updatePosition()
+    const onResize = () => updatePosition()
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [open, updatePosition])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = triggerRef.current
+      const p = popoverRef.current
+      const target = e.target as Node
+      if (t?.contains(target) || p?.contains(target)) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const item = itemsRef.current[activeIndex]
+    item?.scrollIntoView({ block: 'nearest' })
+  }, [open, activeIndex])
+
+  useEffect(() => {
+    if (!open) return
+    const id = requestAnimationFrame(() => popoverRef.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [open])
+
+  const commit = (next: T) => {
+    onChange(next)
+    setOpen(false)
+    requestAnimationFrame(() => triggerRef.current?.focus())
+  }
+
+  const onTriggerKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    if (
+      e.key === 'ArrowDown' ||
+      e.key === 'ArrowUp' ||
+      e.key === 'Enter' ||
+      e.key === ' '
+    ) {
+      e.preventDefault()
+      setOpen(true)
+    }
+  }
+
+  const onListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setOpen(false)
+      requestAnimationFrame(() => triggerRef.current?.focus())
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveIndex((i) => (i + 1) % options.length)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIndex((i) => (i - 1 + options.length) % options.length)
+      return
+    }
+    if (e.key === 'Home') {
+      e.preventDefault()
+      setActiveIndex(0)
+      return
+    }
+    if (e.key === 'End') {
+      e.preventDefault()
+      setActiveIndex(options.length - 1)
+      return
+    }
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      const opt = options[activeIndex]
+      if (opt) commit(opt.value)
+    }
+  }
+
+  return (
+    <div className="combobox">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="select"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        onKeyDown={onTriggerKeyDown}
+      >
+        <span className="combobox-value">{selected?.label ?? ''}</span>
+      </button>
+      {open && (
+        <div
+          ref={popoverRef}
+          className="combobox-menu"
+          role="listbox"
+          tabIndex={-1}
+          onKeyDown={onListKeyDown}
+          style={{
+            left: pos.left,
+            top: pos.top,
+            width: pos.width,
+            maxHeight: maxH,
+          }}
+        >
+          {options.map((opt, i) => (
+            <button
+              key={opt.value}
+              ref={(node) => {
+                itemsRef.current[i] = node
+              }}
+              type="button"
+              role="option"
+              aria-selected={opt.value === value}
+              className={`combobox-item${i === activeIndex ? ' is-active' : ''}${opt.value === value ? ' is-selected' : ''}`}
+              onMouseEnter={() => setActiveIndex(i)}
+              onClick={() => commit(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1128,7 +1352,6 @@ export default function App() {
     setEdgeEmphasis(randInt(0, 100) / 100)
     setUseColor(randBool())
     setColorSaturationPct(randInt(100, 250))
-    setAnimEnabled(randBool())
     setAnimMode(ANIM_MODES[randInt(0, ANIM_MODES.length - 1)]!)
     setAnimSpeed(randInt(20, 300) / 100)
     const { bg, glyph } = randomContrastingBgAndGlyph()
@@ -1248,12 +1471,18 @@ export default function App() {
               characters
             </p>
             <div className="select-wrap">
-              <select
-                className="select"
+              <Combobox
                 value={presetValue}
                 disabled={disabled}
-                onChange={(e) => {
-                  const v = e.target.value
+                ariaLabel="Character preset"
+                options={[
+                  ...CHARSET_PRESETS.map((p) => ({
+                    value: p.label,
+                    label: p.label.toLowerCase(),
+                  })),
+                  { value: 'Custom', label: 'custom' },
+                ]}
+                onChange={(v) => {
                   if (v === 'Custom') {
                     setCharset('')
                     requestAnimationFrame(() =>
@@ -1264,14 +1493,7 @@ export default function App() {
                   const p = CHARSET_PRESETS.find((x) => x.label === v)
                   if (p) setCharset(p.value)
                 }}
-              >
-                {CHARSET_PRESETS.map((p) => (
-                  <option key={p.label} value={p.label}>
-                    {p.label.toLowerCase()}
-                  </option>
-                ))}
-                <option value="Custom">custom</option>
-              </select>
+              />
             </div>
             <textarea
               ref={charsetTextareaRef}
@@ -1301,20 +1523,15 @@ export default function App() {
             >
               grayscale mode
             </p>
-            <select
-              className="select"
+            <Combobox<GrayscaleMode>
               value={grayscaleMode}
               disabled={disabled}
-              onChange={(e) =>
-                setGrayscaleMode(e.target.value as GrayscaleMode)
-              }
-            >
-              {(Object.keys(grayscaleLabel) as GrayscaleMode[]).map((k) => (
-                <option key={k} value={k}>
-                  {grayscaleLabel[k]}
-                </option>
-              ))}
-            </select>
+              ariaLabel="Grayscale mode"
+              options={(Object.keys(grayscaleLabel) as GrayscaleMode[]).map(
+                (k) => ({ value: k, label: grayscaleLabel[k] })
+              )}
+              onChange={(v) => setGrayscaleMode(v)}
+            />
             <label className="rich-check">
               <input
                 type="checkbox"
@@ -1411,22 +1628,15 @@ export default function App() {
               />
               <span>animate</span>
             </div>
-            <select
-              className="select"
+            <Combobox<AnimationMode>
               value={animEnabled ? resolvedAnimMode : animMode}
               disabled={disabled || !animEnabled}
-              onChange={(e) =>
-                setAnimMode(e.target.value as AnimationMode)
-              }
-            >
-              {ANIM_MODES.filter(
+              ariaLabel="Animation mode"
+              options={ANIM_MODES.filter(
                 (m) => m !== 'solarize' || solarizeEnabled
-              ).map((k) => (
-                <option key={k} value={k}>
-                  {animModeLabel[k]}
-                </option>
-              ))}
-            </select>
+              ).map((k) => ({ value: k, label: animModeLabel[k] }))}
+              onChange={(v) => setAnimMode(v)}
+            />
             <RangeRow
               label="speed"
               valueLabel={String(Math.round(animSpeed * 100))}

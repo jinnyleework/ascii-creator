@@ -10,7 +10,8 @@ function productionCspPlugin() {
     "frame-ancestors 'none'",
     "form-action 'none'",
     "upgrade-insecure-requests",
-    "script-src 'self' 'wasm-unsafe-eval'",
+    // onnxruntime-web loads worker/glue chunks via import(blob:...) — needs blob: or sessions fail in prod
+    "script-src 'self' 'wasm-unsafe-eval' blob:",
     "style-src 'self'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
