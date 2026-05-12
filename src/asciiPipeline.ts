@@ -12,7 +12,7 @@ export type AnimationMode =
   | 'hue'
   | 'sharpen'
   | 'edge'
-  | 'glow'
+  | 'blur'
 
 export interface AsciiPipelineParams {
   columns: number
@@ -34,6 +34,17 @@ export interface AsciiPipelineParams {
   /** 0–1, drives animation modes when animating */
   animationPhase: number
   animationMode: AnimationMode | null
+  /**
+   * #rrggbb — RGBA transparent pixels are composited onto this before tone ramp
+   * (matches the preview stage so “remove background” does not read as white).
+   */
+  alphaMatteHex?: string
+  /** When true and !useColor: glyph colours use HSL from tone luminance instead of flat grayscaleGlyphHex. */
+  grayscaleHueTintEnabled: boolean
+  /** 0–360 */
+  grayscaleHueTintDeg: number
+  /** 0–1 HSL saturation for the tint */
+  grayscaleHueTintSaturation: number
 }
 
 export interface AsciiCell {
@@ -61,6 +72,13 @@ function animWave01(phase: number): number {
 function normalizeHex6(s: string): string | null {
   const m = s.trim().match(/^#?([0-9a-f]{6})$/i)
   return m ? `#${m[1]!.toLowerCase()}` : null
+}
+
+function alphaMatteRgb255(hex: string | undefined): [number, number, number] {
+  const n = hex ? normalizeHex6(hex) : null
+  if (!n) return [255, 255, 255]
+  const v = parseInt(n.slice(1), 16)
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
 }
 
 function grayscaleFrom(r: number, g: number, b: number, mode: GrayscaleMode): number {
@@ -196,6 +214,47 @@ function hueRotateRgb(r: number, g: number, b: number, deg: number): [number, nu
   return [clamp255((rp + m) * 255), clamp255((gp + m) * 255), clamp255((bp + m) * 255)]
 }
 
+/** HSL with hDeg 0–360, s and l in 0–1 → RGB 0–255 */
+function hslToRgb255(hDeg: number, s: number, l: number): [number, number, number] {
+  const h = ((((hDeg % 360) + 360) % 360) / 360) % 1
+  const ss = Math.max(0, Math.min(1, s))
+  const ll = Math.max(0, Math.min(1, l))
+  const c = (1 - Math.abs(2 * ll - 1)) * ss
+  const x = c * (1 - Math.abs(((h * 6) % 2) - 1))
+  const m = ll - c / 2
+  let rp = 0,
+    gp = 0,
+    bp = 0
+  const seg = Math.floor(h * 6)
+  switch (seg) {
+    case 0:
+      rp = c
+      gp = x
+      break
+    case 1:
+      rp = x
+      gp = c
+      break
+    case 2:
+      gp = c
+      bp = x
+      break
+    case 3:
+      gp = x
+      bp = c
+      break
+    case 4:
+      rp = x
+      bp = c
+      break
+    default:
+      rp = c
+      bp = x
+      break
+  }
+  return [clamp255((rp + m) * 255), clamp255((gp + m) * 255), clamp255((bp + m) * 255)]
+}
+
 function boxBlur(gray: Float32Array, cols: number, rows: number, r: number): Float32Array {
   if (r <= 0) return gray.slice()
   const out = new Float32Array(cols * rows)
@@ -288,6 +347,7 @@ export function buildAscii(
   const cr = new Float32Array(n)
   const cg = new Float32Array(n)
   const cb = new Float32Array(n)
+  const [mr, mg, mb] = alphaMatteRgb255(params.alphaMatteHex)
 
   for (let i = 0; i < n; i++) {
     const o = i * 4
@@ -295,9 +355,9 @@ export function buildAscii(
     let g = data[o + 1]!
     let b = data[o + 2]!
     const a = data[o + 3]! / 255
-    r = r * a + 255 * (1 - a)
-    g = g * a + 255 * (1 - a)
-    b = b * a + 255 * (1 - a)
+    r = r * a + mr * (1 - a)
+    g = g * a + mg * (1 - a)
+    b = b * a + mb * (1 - a)
     cr[i] = r
     cg[i] = g
     cb[i] = b
@@ -320,7 +380,7 @@ export function buildAscii(
   }
 
   let passes = Math.max(0, Math.min(8, Math.round(params.blurPasses)))
-  if (params.animationMode === 'glow') {
+  if (params.animationMode === 'blur') {
     passes = Math.round(8 * animWave01(params.animationPhase))
   }
   const r = passes > 0 ? 1 : 0
@@ -392,7 +452,16 @@ export function buildAscii(
 
       const color = params.useColor
         ? rgbToHex(R, G, B)
-        : (normalizeHex6(params.grayscaleGlyphHex) ?? '#0a0a0a')
+        : params.grayscaleHueTintEnabled &&
+            params.grayscaleHueTintSaturation > 0.001
+          ? rgbToHex(
+              ...hslToRgb255(
+                params.grayscaleHueTintDeg,
+                params.grayscaleHueTintSaturation,
+                0.06 + 0.88 * (gray[i]! / 255)
+              )
+            )
+          : (normalizeHex6(params.grayscaleGlyphHex) ?? '#0a0a0a')
       row.push({ ch, color })
       line += ch
     }
@@ -430,8 +499,6 @@ export interface SvgOverlayExportOptions {
   imageDataUrl: string
   width: number
   height: number
-  useColor: boolean
-  grayscaleGlyphColor: string
   /** Faint dark outline around glyphs for legibility (matches viewfinder text-shadow). */
   glyphOutline?: string
 }
@@ -445,8 +512,6 @@ export function asciiOverlayToSvg(
     imageDataUrl,
     width: bw,
     height: bh,
-    useColor,
-    grayscaleGlyphColor,
     glyphOutline = 'rgba(0,0,0,0.35)',
   } = opts
 
@@ -462,7 +527,7 @@ export function asciiOverlayToSvg(
     for (let xi = 0; xi < row.length; xi++) {
       const cell = row[xi]!
       const cx = (xi + 0.5) * cellW
-      const color = useColor ? cell.color : grayscaleGlyphColor
+      const color = cell.color
       glyphs.push(
         `<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" fill="${escapeXml(color)}" stroke="${escapeXml(glyphOutline)}" stroke-width="${strokeWidth.toFixed(2)}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central" font-family="'Geist Mono', ui-monospace, Consolas, monospace" font-size="${fontSize.toFixed(2)}" font-weight="500">${escapeXml(cell.ch)}</text>`
       )

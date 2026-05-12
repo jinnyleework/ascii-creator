@@ -8,11 +8,63 @@ export interface PngExportOptions {
   pixelRatio: number
 }
 
+/** Photo layer under ASCII glyphs (preview + exports share this). */
+export type OverlayUnderlayOptions = {
+  photoGrayscale: boolean
+  /** 0–100; lower = more transparent underlay. */
+  photoOpacityPct: number
+  /** 0–360; hue-rotate on the B&W underlay only. */
+  photoHueDeg: number
+}
+
+function clamp01Pct(n: number): number {
+  return Math.max(0, Math.min(100, n))
+}
+
+function normHueDeg(n: number): number {
+  const h = n % 360
+  return h < 0 ? h + 360 : h
+}
+
+function canvasFilterForUnderlay(o: OverlayUnderlayOptions): string {
+  if (!o.photoGrayscale) return 'none'
+  const h = normHueDeg(o.photoHueDeg)
+  if (h === 0) return 'grayscale(1) contrast(1.06)'
+  return `grayscale(1) contrast(1.06) hue-rotate(${h}deg)`
+}
+
+export function underlayImgStyle(o: OverlayUnderlayOptions): {
+  opacity: number
+  filter: string
+} {
+  return {
+    opacity: clamp01Pct(o.photoOpacityPct) / 100,
+    filter: canvasFilterForUnderlay(o),
+  }
+}
+
+export function drawBitmapAsOverlayUnderlay(
+  ctx: CanvasRenderingContext2D,
+  bitmap: ImageBitmap,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+  o: OverlayUnderlayOptions
+): void {
+  const op = clamp01Pct(o.photoOpacityPct) / 100
+  ctx.save()
+  ctx.globalAlpha = op
+  ctx.filter = canvasFilterForUnderlay(o)
+  ctx.drawImage(bitmap, dx, dy, dw, dh)
+  ctx.restore()
+}
+
 export interface OverlayPngExportOptions {
   bitmap: ImageBitmap
-  useColor: boolean
-  grayscaleGlyphColor: string
   photoGrayscale: boolean
+  photoOpacityPct: number
+  photoHueDeg: number
   /** Sharpness multiplier (2 = double internal resolution). */
   pixelRatio: number
 }
@@ -22,7 +74,13 @@ export function asciiOverlayToPngBlob(
   result: AsciiResult,
   opts: OverlayPngExportOptions
 ): Promise<Blob | null> {
-  const { bitmap, useColor, grayscaleGlyphColor, photoGrayscale, pixelRatio } = opts
+  const {
+    bitmap,
+    photoGrayscale,
+    photoOpacityPct,
+    photoHueDeg,
+    pixelRatio,
+  } = opts
   if (result.cols <= 0 || result.rows <= 0) return Promise.resolve(null)
 
   const bw = bitmap.width
@@ -36,11 +94,11 @@ export function asciiOverlayToPngBlob(
   const ctx = canvas.getContext('2d')
   if (!ctx) return Promise.resolve(null)
 
-  if (photoGrayscale) {
-    ctx.filter = 'grayscale(1) contrast(1.06)'
-  }
-  ctx.drawImage(bitmap, 0, 0, w, h)
-  ctx.filter = 'none'
+  drawBitmapAsOverlayUnderlay(ctx, bitmap, 0, 0, w, h, {
+    photoGrayscale,
+    photoOpacityPct,
+    photoHueDeg,
+  })
 
   const cellW = w / result.cols
   const cellH = h / result.rows
@@ -61,7 +119,7 @@ export function asciiOverlayToPngBlob(
     for (let xi = 0; xi < row.length; xi++) {
       const cell = row[xi]!
       const cx = (xi + 0.5) * cellW
-      ctx.fillStyle = useColor ? cell.color : grayscaleGlyphColor
+      ctx.fillStyle = cell.color
       ctx.fillText(cell.ch, cx, cy)
     }
   }
@@ -73,17 +131,14 @@ export function asciiOverlayToPngBlob(
 
 export function bitmapToPngDataUrl(
   bitmap: ImageBitmap,
-  photoGrayscale: boolean
+  o: OverlayUnderlayOptions
 ): string | null {
   const canvas = document.createElement('canvas')
   canvas.width = bitmap.width
   canvas.height = bitmap.height
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
-  if (photoGrayscale) {
-    ctx.filter = 'grayscale(1) contrast(1.06)'
-  }
-  ctx.drawImage(bitmap, 0, 0)
+  drawBitmapAsOverlayUnderlay(ctx, bitmap, 0, 0, bitmap.width, bitmap.height, o)
   return canvas.toDataURL('image/png')
 }
 

@@ -799,10 +799,6 @@
   user-select: none;
 }
 
-.ascii-overlay__img--bw {
-  filter: grayscale(1) contrast(1.06);
-}
-
 .ascii-overlay__glyphs {
   position: absolute;
   inset: 0;

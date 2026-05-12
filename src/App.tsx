@@ -21,6 +21,7 @@ import {
   asciiOverlayToPngBlob,
   asciiResultToPngBlob,
   bitmapToPngDataUrl,
+  underlayImgStyle,
 } from './exportPng'
 import logoAsciiCreator from './assets/logo-ascii-creator.png'
 import horseAscii from './assets/horse-ascii.png'
@@ -48,7 +49,7 @@ const ANIM_MODES: AnimationMode[] = [
   'solarize',
   'sharpen',
   'edge',
-  'glow',
+  'blur',
 ]
 
 const PRIVACY_NOTE =
@@ -73,6 +74,13 @@ type PresetSettings = {
   asciiBackground: string
   grayscaleGlyphColor: string
   overlayOnImage: boolean
+  /** v2 preset fields — omitted in older saved presets */
+  overlayPhotoGrayscale?: boolean
+  overlayPhotoOpacity?: number
+  overlayPhotoHueDeg?: number
+  grayscaleHueTintEnabled?: boolean
+  grayscaleHueTintDeg?: number
+  grayscaleHueTintSaturationPct?: number
 }
 
 type SettingsPreset = {
@@ -109,7 +117,19 @@ function isValidPreset(value: unknown): value is SettingsPreset {
     typeof s.animSpeed === 'number' &&
     typeof s.asciiBackground === 'string' &&
     typeof s.grayscaleGlyphColor === 'string' &&
-    typeof s.overlayOnImage === 'boolean'
+    typeof s.overlayOnImage === 'boolean' &&
+    (typeof s.overlayPhotoGrayscale === 'boolean' ||
+      s.overlayPhotoGrayscale === undefined) &&
+    (typeof s.overlayPhotoOpacity === 'number' ||
+      s.overlayPhotoOpacity === undefined) &&
+    (typeof s.overlayPhotoHueDeg === 'number' ||
+      s.overlayPhotoHueDeg === undefined) &&
+    (typeof s.grayscaleHueTintEnabled === 'boolean' ||
+      s.grayscaleHueTintEnabled === undefined) &&
+    (typeof s.grayscaleHueTintDeg === 'number' ||
+      s.grayscaleHueTintDeg === undefined) &&
+    (typeof s.grayscaleHueTintSaturationPct === 'number' ||
+      s.grayscaleHueTintSaturationPct === undefined)
   )
 }
 
@@ -119,7 +139,21 @@ function loadPresets(): SettingsPreset[] {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(isValidPreset)
+    const migrated = parsed.map((p: unknown) => {
+      if (!p || typeof p !== 'object') return p
+      const entry = p as Record<string, unknown>
+      const s = entry.settings
+      if (!s || typeof s !== 'object') return p
+      const st = s as Record<string, unknown>
+      if (st.animMode === 'glow') {
+        return {
+          ...entry,
+          settings: { ...st, animMode: 'blur' },
+        }
+      }
+      return p
+    })
+    return migrated.filter(isValidPreset)
   } catch {
     return []
   }
@@ -666,16 +700,16 @@ function AsciiImageOverlay({
   bitmap,
   previewUrl,
   asciiResult,
-  useColor,
-  grayscaleGlyphColor,
   photoGrayscale,
+  photoOpacityPct,
+  photoHueDeg,
 }: {
   bitmap: ImageBitmap
   previewUrl: string
   asciiResult: AsciiResult
-  useColor: boolean
-  grayscaleGlyphColor: string
   photoGrayscale: boolean
+  photoOpacityPct: number
+  photoHueDeg: number
 }) {
   const bw = bitmap.width
   const bh = bitmap.height
@@ -686,16 +720,25 @@ function AsciiImageOverlay({
     2,
     Math.min(cellW / OVERLAY_GLYPH_ADVANCE_EM, cellH * 0.92)
   )
+  const underlay = underlayImgStyle({
+    photoGrayscale,
+    photoOpacityPct,
+    photoHueDeg,
+  })
 
   return (
     <div className="ascii-overlay" style={{ width: bw, height: bh }}>
       <img
-        className={`ascii-overlay__img${photoGrayscale ? ' ascii-overlay__img--bw' : ''}`}
+        className="ascii-overlay__img"
         src={previewUrl}
         alt=""
         width={bw}
         height={bh}
         draggable={false}
+        style={{
+          opacity: underlay.opacity,
+          filter: underlay.filter,
+        }}
       />
       <div
         className="ascii-overlay__glyphs"
@@ -712,7 +755,7 @@ function AsciiImageOverlay({
               key={`${yi}-${xi}`}
               className="ascii-overlay__cell"
               style={{
-                color: useColor ? cell.color : grayscaleGlyphColor,
+                color: cell.color,
               }}
             >
               {cell.ch}
@@ -772,22 +815,24 @@ function SidebarBrand({ onLogoClick }: { onLogoClick: () => void }) {
   return (
     <div className="sidebar-brand">
       <div className="sidebar-brand-logo-wrap">
-        <button
-          type="button"
-          className={`sidebar-brand-logo-btn${spinning ? ' is-spinning' : ''}`}
-          onClick={handleLogoClick}
-          onAnimationEnd={() => setSpinning(false)}
-          aria-label="Randomise all settings"
-        >
-          <img
-            className="sidebar-brand-logo"
-            src={logoAsciiCreator}
-            alt=""
-            width={33}
-            height={36}
-            decoding="async"
-          />
-        </button>
+        <TooltipSpan kind="info" tip="Roll the design" className="info-tip-wrap">
+          <button
+            type="button"
+            className={`sidebar-brand-logo-btn${spinning ? ' is-spinning' : ''}`}
+            onClick={handleLogoClick}
+            onAnimationEnd={() => setSpinning(false)}
+            aria-label="Roll the design"
+          >
+            <img
+              className="sidebar-brand-logo"
+              src={logoAsciiCreator}
+              alt=""
+              width={33}
+              height={36}
+              decoding="async"
+            />
+          </button>
+        </TooltipSpan>
       </div>
       <div className="sidebar-brand-text">
         <div className="sidebar-brand-headline">
@@ -900,8 +945,14 @@ export default function App() {
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'err'>('idle')
   const [asciiBackground, setAsciiBackground] = useState('#ffffff')
   const [grayscaleGlyphColor, setGrayscaleGlyphColor] = useState('#0a0a0a')
+  const [grayscaleHueTintEnabled, setGrayscaleHueTintEnabled] = useState(false)
+  const [grayscaleHueTintDeg, setGrayscaleHueTintDeg] = useState(0)
+  const [grayscaleHueTintSaturationPct, setGrayscaleHueTintSaturationPct] =
+    useState(62)
   const [overlayOnImage, setOverlayOnImage] = useState(false)
   const [overlayPhotoGrayscale, setOverlayPhotoGrayscale] = useState(false)
+  const [overlayPhotoOpacity, setOverlayPhotoOpacity] = useState(100)
+  const [overlayPhotoHueDeg, setOverlayPhotoHueDeg] = useState(0)
   const [exportOpen, setExportOpen] = useState(false)
   const [presetsOpen, setPresetsOpen] = useState(false)
   const [presets, setPresets] = useState<SettingsPreset[]>(() => loadPresets())
@@ -1034,6 +1085,10 @@ export default function App() {
       colorSaturation: useColor ? colorSaturationPct / 100 : 1,
       animationPhase: phase,
       animationMode: animEnabled ? resolvedAnimMode : null,
+      alphaMatteHex: asciiBackground,
+      grayscaleHueTintEnabled: !useColor && grayscaleHueTintEnabled,
+      grayscaleHueTintDeg,
+      grayscaleHueTintSaturation: grayscaleHueTintSaturationPct / 100,
     })
   }, [
     asciiBitmap,
@@ -1053,6 +1108,11 @@ export default function App() {
     phase,
     animEnabled,
     resolvedAnimMode,
+    asciiBackground,
+    useColor,
+    grayscaleHueTintEnabled,
+    grayscaleHueTintDeg,
+    grayscaleHueTintSaturationPct,
   ])
 
   const plainText = asciiResult?.plainText ?? ''
@@ -1071,6 +1131,7 @@ export default function App() {
         asciiBitmap?.width ?? 0,
         asciiBitmap?.height ?? 0,
         nobgReady ? 1 : 0,
+        asciiBackground,
       ].join('\u001e'),
     [
       asciiResult?.cols,
@@ -1083,6 +1144,7 @@ export default function App() {
       asciiBitmap?.width,
       asciiBitmap?.height,
       nobgReady,
+      asciiBackground,
     ]
   )
 
@@ -1095,6 +1157,8 @@ export default function App() {
     setFile(f)
     setNobgFile(null)
     setOverlayPhotoGrayscale(false)
+    setOverlayPhotoOpacity(100)
+    setOverlayPhotoHueDeg(0)
     setCopyState('idle')
     setBgRemoveError(null)
   }, [])
@@ -1144,14 +1208,16 @@ export default function App() {
       let svg: string
       let suffix = ''
       if (overlayActive && sourceBitmap) {
-        const imageDataUrl = bitmapToPngDataUrl(sourceBitmap, overlayPhotoGrayscale)
+        const imageDataUrl = bitmapToPngDataUrl(sourceBitmap, {
+          photoGrayscale: overlayPhotoGrayscale,
+          photoOpacityPct: overlayPhotoOpacity,
+          photoHueDeg: overlayPhotoHueDeg,
+        })
         if (!imageDataUrl) return
         svg = asciiOverlayToSvg(asciiResult, {
           imageDataUrl,
           width: sourceBitmap.width,
           height: sourceBitmap.height,
-          useColor,
-          grayscaleGlyphColor,
         })
         suffix = '-overlay'
       } else {
@@ -1180,8 +1246,8 @@ export default function App() {
       overlayOnImage,
       sourceBitmap,
       overlayPhotoGrayscale,
-      useColor,
-      grayscaleGlyphColor,
+      overlayPhotoOpacity,
+      overlayPhotoHueDeg,
     ]
   )
 
@@ -1191,9 +1257,9 @@ export default function App() {
     const blob = overlayActive && sourceBitmap
       ? await asciiOverlayToPngBlob(asciiResult, {
           bitmap: sourceBitmap,
-          useColor,
-          grayscaleGlyphColor,
           photoGrayscale: overlayPhotoGrayscale,
+          photoOpacityPct: overlayPhotoOpacity,
+          photoHueDeg: overlayPhotoHueDeg,
           pixelRatio: 2,
         })
       : await asciiResultToPngBlob(asciiResult, {
@@ -1218,8 +1284,8 @@ export default function App() {
     overlayOnImage,
     sourceBitmap,
     overlayPhotoGrayscale,
-    useColor,
-    grayscaleGlyphColor,
+    overlayPhotoOpacity,
+    overlayPhotoHueDeg,
   ])
 
   const removeImageBackground = useCallback(async () => {
@@ -1270,6 +1336,12 @@ export default function App() {
       asciiBackground,
       grayscaleGlyphColor,
       overlayOnImage,
+      overlayPhotoGrayscale,
+      overlayPhotoOpacity,
+      overlayPhotoHueDeg,
+      grayscaleHueTintEnabled,
+      grayscaleHueTintDeg,
+      grayscaleHueTintSaturationPct,
     }),
     [
       columns,
@@ -1290,6 +1362,12 @@ export default function App() {
       asciiBackground,
       grayscaleGlyphColor,
       overlayOnImage,
+      overlayPhotoGrayscale,
+      overlayPhotoOpacity,
+      overlayPhotoHueDeg,
+      grayscaleHueTintEnabled,
+      grayscaleHueTintDeg,
+      grayscaleHueTintSaturationPct,
     ]
   )
 
@@ -1328,6 +1406,36 @@ export default function App() {
     setAsciiBackground(s.asciiBackground)
     setGrayscaleGlyphColor(s.grayscaleGlyphColor)
     setOverlayOnImage(s.overlayOnImage)
+    setOverlayPhotoGrayscale(
+      typeof s.overlayPhotoGrayscale === 'boolean'
+        ? s.overlayPhotoGrayscale
+        : false
+    )
+    setOverlayPhotoOpacity(
+      typeof s.overlayPhotoOpacity === 'number'
+        ? clampNum(s.overlayPhotoOpacity, 0, 100)
+        : 100
+    )
+    setOverlayPhotoHueDeg(
+      typeof s.overlayPhotoHueDeg === 'number'
+        ? clampNum(s.overlayPhotoHueDeg, 0, 360)
+        : 0
+    )
+    setGrayscaleHueTintEnabled(
+      typeof s.grayscaleHueTintEnabled === 'boolean'
+        ? s.grayscaleHueTintEnabled
+        : false
+    )
+    setGrayscaleHueTintDeg(
+      typeof s.grayscaleHueTintDeg === 'number'
+        ? clampNum(s.grayscaleHueTintDeg, 0, 360)
+        : 0
+    )
+    setGrayscaleHueTintSaturationPct(
+      typeof s.grayscaleHueTintSaturationPct === 'number'
+        ? clampNum(s.grayscaleHueTintSaturationPct, 5, 100)
+        : 62
+    )
     setPresetsOpen(false)
   }, [])
 
@@ -1366,7 +1474,7 @@ export default function App() {
     solarize: 'solarize sweep',
     sharpen: 'sharpen pulse',
     edge: 'edge emphasis pulse',
-    glow: 'glow pulse',
+    blur: 'blur pulse',
   }
 
   const grayscaleLabel: Record<GrayscaleMode, string> = {
@@ -1446,7 +1554,11 @@ export default function App() {
                 onChange={(e) => {
                   const on = e.target.checked
                   setOverlayOnImage(on)
-                  if (!on) setOverlayPhotoGrayscale(false)
+                  if (!on) {
+                    setOverlayPhotoGrayscale(false)
+                    setOverlayPhotoOpacity(100)
+                    setOverlayPhotoHueDeg(0)
+                  }
                 }}
               />
               <span>overlay on image</span>
@@ -1457,11 +1569,34 @@ export default function App() {
                 type="checkbox"
                 checked={overlayPhotoGrayscale}
                 disabled={disabled || !overlayOnImage}
-                onChange={(e) => setOverlayPhotoGrayscale(e.target.checked)}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  setOverlayPhotoGrayscale(on)
+                  if (!on) setOverlayPhotoHueDeg(0)
+                }}
               />
               <span>{'B&W underlay'}</span>
               <InfoTip label="When overlay is on, shows the photo in greyscale under the ASCII so glyphs stand out more." />
             </label>
+            <RangeRow
+              label="underlay opacity"
+              valueLabel={`${overlayPhotoOpacity}%`}
+              min={0}
+              max={100}
+              value={overlayPhotoOpacity}
+              onChange={setOverlayPhotoOpacity}
+              disabled={disabled || !overlayOnImage}
+            />
+            <RangeRow
+              label="B&W tint (hue)"
+              valueLabel={`${overlayPhotoHueDeg}°`}
+              min={0}
+              max={360}
+              step={5}
+              value={overlayPhotoHueDeg}
+              onChange={setOverlayPhotoHueDeg}
+              disabled={disabled || !overlayOnImage || !overlayPhotoGrayscale}
+            />
           </div>
 
           <div className="section section--pad-y">
@@ -1540,7 +1675,7 @@ export default function App() {
                 onChange={(e) => setImageInvert(e.target.checked)}
               />
               <span>invert image</span>
-              <InfoTip label="Flips the source image brightness (like a negative) before glow, edge emphasis, and solarise run, so light and dark are swapped at the source." />
+              <InfoTip label="Flips the source image brightness (like a negative) before blur, edge emphasis, and solarise run, so light and dark are swapped at the source." />
             </label>
             <label className="rich-check">
               <input
@@ -1579,11 +1714,40 @@ export default function App() {
               onChange={setColorSaturationPct}
               disabled={disabled || !useColor}
             />
+            <label className="rich-check">
+              <input
+                type="checkbox"
+                checked={grayscaleHueTintEnabled}
+                disabled={disabled || useColor}
+                onChange={(e) => setGrayscaleHueTintEnabled(e.target.checked)}
+              />
+              <span>greyscale hue tint</span>
+              <InfoTip label="When ASCII is in greyscale (not full colour), colours each glyph from your chosen hue and saturation while lightness still follows the tone ramp." />
+            </label>
+            <RangeRow
+              label="tint hue"
+              valueLabel={`${grayscaleHueTintDeg}°`}
+              min={0}
+              max={360}
+              step={5}
+              value={grayscaleHueTintDeg}
+              onChange={setGrayscaleHueTintDeg}
+              disabled={disabled || useColor || !grayscaleHueTintEnabled}
+            />
+            <RangeRow
+              label="tint saturation"
+              valueLabel={`${grayscaleHueTintSaturationPct}%`}
+              min={5}
+              max={100}
+              value={grayscaleHueTintSaturationPct}
+              onChange={setGrayscaleHueTintSaturationPct}
+              disabled={disabled || useColor || !grayscaleHueTintEnabled}
+            />
           </div>
 
           <div className="section section--pad-y">
             <RangeRow
-              label="glow"
+              label="blur"
               valueLabel={String(blurPasses)}
               min={0}
               max={8}
@@ -1690,11 +1854,11 @@ export default function App() {
                     bitmap={sourceBitmap}
                     previewUrl={previewUrl}
                     asciiResult={asciiResult}
-                    useColor={useColor}
-                    grayscaleGlyphColor={grayscaleGlyphColor}
                     photoGrayscale={overlayPhotoGrayscale}
+                    photoOpacityPct={overlayPhotoOpacity}
+                    photoHueDeg={overlayPhotoHueDeg}
                   />
-                ) : useColor && asciiResult ? (
+                ) : (useColor || grayscaleHueTintEnabled) && asciiResult ? (
                   <div className="ascii ascii--color" aria-live="polite">
                     {asciiResult.lines.map((row, yi) => (
                       <div className="ascii-line" key={yi}>
@@ -1795,14 +1959,22 @@ export default function App() {
             </button>
           </RailTip>
 
-          <RailTip tip="Character colour">
+          <RailTip
+            tip={
+              useColor
+                ? 'Character colour'
+                : grayscaleHueTintEnabled
+                  ? 'Flat character colour (turn off greyscale hue tint to use)'
+                  : 'Character colour'
+            }
+          >
             <label
-              className={`icon-btn icon-swatch${useColor ? ' is-disabled' : ''}`}
+              className={`icon-btn icon-swatch${useColor || grayscaleHueTintEnabled ? ' is-disabled' : ''}`}
             >
               <input
                 type="color"
                 value={grayscaleGlyphColor}
-                disabled={useColor}
+                disabled={useColor || grayscaleHueTintEnabled}
                 onChange={(e) => setGrayscaleGlyphColor(e.target.value)}
                 aria-label="Set ASCII character colour (grayscale mode)"
               />
