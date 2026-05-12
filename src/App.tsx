@@ -575,7 +575,7 @@ export default function App() {
               label="output size"
               valueLabel={String(columns)}
               min={40}
-              max={200}
+              max={500}
               value={columns}
               onChange={setColumns}
               disabled={disabled}
@@ -583,7 +583,11 @@ export default function App() {
           </div>
 
           <div className="section section--pad-y">
-            <p className="section-label">characters</p>
+            <p
+              className={`section-label${disabled ? ' section-label--disabled' : ''}`}
+            >
+              characters
+            </p>
             <div className="select-wrap">
               <select
                 className="select"
@@ -626,7 +630,11 @@ export default function App() {
           </div>
 
           <div className="section section--pad-y">
-            <p className="section-label">grayscale mode</p>
+            <p
+              className={`section-label${disabled ? ' section-label--disabled' : ''}`}
+            >
+              grayscale mode
+            </p>
             <select
               className="select"
               value={grayscaleMode}
@@ -717,7 +725,11 @@ export default function App() {
           </div>
 
           <div className="section section--pad-y">
-            <p className="section-label">animations</p>
+            <p
+              className={`section-label${disabled ? ' section-label--disabled' : ''}`}
+            >
+              animations
+            </p>
             <div className="switch-row">
               <button
                 type="button"

@@ -69,7 +69,8 @@
 
 .sidebar {
   border-right: 1px solid var(--border);
-  padding: 24px;
+  /* No right padding so the scroll track sits flush with the border line */
+  padding: 24px 0 24px 24px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -85,6 +86,8 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+  /* Match body: content inset + thin scrollbar (~8px + 4px) from the border */
+  padding-right: 12px;
 }
 
 .logo-mark {
@@ -102,8 +105,36 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding-right: 4px;
-  margin-right: -4px;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.sidebar-body:hover {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.sidebar-body:focus-within {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.sidebar-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-body::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 0;
+}
+
+.sidebar-body:hover::-webkit-scrollbar-thumb,
+.sidebar-body:focus-within::-webkit-scrollbar-thumb,
+.sidebar-body::-webkit-scrollbar-thumb:hover {
+  background-color: var(--border-strong);
 }
 
 .section {
@@ -122,6 +153,11 @@
   font-weight: 500;
   color: var(--muted);
   line-height: 20px;
+}
+
+/* Match .range-block.is-disabled label treatment when controls have no image yet */
+.section-label.section-label--disabled {
+  opacity: 0.5;
 }
 
 .row-label {
@@ -614,8 +650,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 48px;
+  height: 48px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 9999px;
@@ -659,9 +695,9 @@
 
 .icon-swatch .swatch-visual {
   display: block;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
   border: 1px solid var(--border-strong);
   pointer-events: none;
   box-sizing: border-box;
@@ -679,6 +715,8 @@
 
 .icon-btn svg {
   display: block;
+  width: 24px;
+  height: 24px;
 }
 
 .export-pop {
