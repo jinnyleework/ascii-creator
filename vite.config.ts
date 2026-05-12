@@ -15,7 +15,8 @@ function productionCspPlugin() {
     "style-src 'self'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    "connect-src 'self' https://staticimgly.com",
+    // ORT fetches wasm/mjs bytes from blob: URLs imgly creates after CDN download
+    "connect-src 'self' blob: https://staticimgly.com",
     "worker-src 'self' blob:",
     "media-src 'self' blob: data:",
   ].join('; ')
