@@ -532,7 +532,21 @@ export function RangeRow(props: {
 }) {
   const { label, valueLabel, min, max, value, step = 1, onChange, disabled } =
     props
+  const [dragging, setDragging] = useState(false)
   const fill = pct(value, min, max)
+  const scale = fill / 100
+
+  useEffect(() => {
+    if (!dragging) return
+    const end = () => setDragging(false)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    return () => {
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+  }, [dragging])
+
   return (
     <div className={`range-block${disabled ? ' is-disabled' : ''}`}>
       <div className="row-label">
@@ -540,7 +554,10 @@ export function RangeRow(props: {
         <span className="value-hint">{valueLabel}</span>
       </div>
       <div className="range-track">
-        <div className="range-fill" style={{ width: `${fill}%` }} />
+        <div
+          className={`range-fill${dragging ? ' is-dragging' : ''}`}
+          style={{ transform: `scaleX(${scale})` }}
+        />
         <input
           type="range"
           min={min}
@@ -548,6 +565,7 @@ export function RangeRow(props: {
           step={step}
           value={value}
           disabled={disabled}
+          onPointerDown={() => setDragging(true)}
           onChange={(e) => onChange(Number(e.target.value))}
         />
       </div>

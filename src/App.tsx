@@ -28,6 +28,8 @@ import horseHomeAscii from './assets/horse-home-ascii.png'
 import horseHome8bit from './assets/horse-home-8bit.png'
 import './App.css'
 import { EightBitTool } from './pages/EightBitTool'
+import { HalftoneTool } from './pages/HalftoneTool'
+import { DensityContourTool } from './pages/DensityContourTool'
 import { BrandLogoHoverMark, ToolBrandHomeLink } from './toolUi'
 
 const CHARSET_PRESETS: { label: string; value: string }[] = [
@@ -807,15 +809,18 @@ function useImageBitmap(file: File | null) {
   return bitmap
 }
 
-type HomeHorseFocus = 'neutral' | 'ascii' | 'eight'
+type HomeHorseFocus = 'neutral' | 'ascii' | 'eight' | 'halftone' | 'contour'
 
 function HomeScreen(props: {
   onPickAscii: () => void
   onPickEightbit: () => void
+  onPickHalftone: () => void
+  onPickDensity: () => void
   onDragOver: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
 }) {
-  const { onPickAscii, onPickEightbit, onDragOver, onDrop } = props
+  const { onPickAscii, onPickEightbit, onPickHalftone, onPickDensity, onDragOver, onDrop } =
+    props
   const [horseFocus, setHorseFocus] = useState<HomeHorseFocus>('neutral')
 
   return (
@@ -871,6 +876,28 @@ function HomeScreen(props: {
             onBlur={() => setHorseFocus('neutral')}
           >
             <span className="home-figma__tool-label">8bit</span>
+          </button>
+          <button
+            type="button"
+            className="home-figma__tool"
+            onClick={onPickHalftone}
+            onMouseEnter={() => setHorseFocus('halftone')}
+            onMouseLeave={() => setHorseFocus('neutral')}
+            onFocus={() => setHorseFocus('halftone')}
+            onBlur={() => setHorseFocus('neutral')}
+          >
+            <span className="home-figma__tool-label">halftone</span>
+          </button>
+          <button
+            type="button"
+            className="home-figma__tool"
+            onClick={onPickDensity}
+            onMouseEnter={() => setHorseFocus('contour')}
+            onMouseLeave={() => setHorseFocus('neutral')}
+            onFocus={() => setHorseFocus('contour')}
+            onBlur={() => setHorseFocus('neutral')}
+          >
+            <span className="home-figma__tool-label">contours</span>
           </button>
         </nav>
       </div>
@@ -955,7 +982,21 @@ function RangeRow(props: {
 }) {
   const { label, valueLabel, min, max, value, step = 1, onChange, disabled } =
     props
+  const [dragging, setDragging] = useState(false)
   const fill = pct(value, min, max)
+  const scale = fill / 100
+
+  useEffect(() => {
+    if (!dragging) return
+    const end = () => setDragging(false)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    return () => {
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+  }, [dragging])
+
   return (
     <div className={`range-block${disabled ? ' is-disabled' : ''}`}>
       <div className="row-label">
@@ -963,7 +1004,10 @@ function RangeRow(props: {
         <span className="value-hint">{valueLabel}</span>
       </div>
       <div className="range-track">
-        <div className="range-fill" style={{ width: `${fill}%` }} />
+        <div
+          className={`range-fill${dragging ? ' is-dragging' : ''}`}
+          style={{ transform: `scaleX(${scale})` }}
+        />
         <input
           type="range"
           min={min}
@@ -971,6 +1015,7 @@ function RangeRow(props: {
           step={step}
           value={value}
           disabled={disabled}
+          onPointerDown={() => setDragging(true)}
           onChange={(e) => onChange(Number(e.target.value))}
         />
       </div>
@@ -1017,9 +1062,9 @@ export default function App() {
   const [bgRemoveError, setBgRemoveError] = useState<string | null>(null)
   /** Processed image used only for ASCII; original `file` stays for preview / overlay. */
   const [nobgFile, setNobgFile] = useState<File | null>(null)
-  const [appScreen, setAppScreen] = useState<'home' | 'eightbit' | 'workspace'>(
-    'home'
-  )
+  const [appScreen, setAppScreen] = useState<
+    'home' | 'eightbit' | 'halftone' | 'density' | 'workspace'
+  >('home')
   const [diceSpinning, setDiceSpinning] = useState(false)
 
   const fileRef = useRef<HTMLInputElement>(null)
@@ -1577,11 +1622,17 @@ export default function App() {
         <HomeScreen
           onPickAscii={() => setAppScreen('workspace')}
           onPickEightbit={() => setAppScreen('eightbit')}
+          onPickHalftone={() => setAppScreen('halftone')}
+          onPickDensity={() => setAppScreen('density')}
           onDragOver={(e) => e.preventDefault()}
           onDrop={onDrop}
         />
       ) : appScreen === 'eightbit' ? (
         <EightBitTool onBackHome={() => setAppScreen('home')} />
+      ) : appScreen === 'halftone' ? (
+        <HalftoneTool onBackHome={() => setAppScreen('home')} />
+      ) : appScreen === 'density' ? (
+        <DensityContourTool onBackHome={() => setAppScreen('home')} />
       ) : (
     <div className="shell">
       <aside className="sidebar">
@@ -1651,39 +1702,45 @@ export default function App() {
               <span>overlay on image</span>
               <InfoTip label="Draws the ASCII grid on top of your source image in the preview. Each character lines up with the same pixels the converter samples." />
             </label>
-            <label className="rich-check">
-              <input
-                type="checkbox"
-                checked={overlayPhotoGrayscale}
-                disabled={disabled || !overlayOnImage}
-                onChange={(e) => {
-                  const on = e.target.checked
-                  setOverlayPhotoGrayscale(on)
-                  if (!on) setOverlayPhotoHueDeg(0)
-                }}
-              />
-              <span>{'B&W underlay'}</span>
-              <InfoTip label="When overlay is on, shows the photo in greyscale under the ASCII so glyphs stand out more." />
-            </label>
-            <RangeRow
-              label="underlay opacity"
-              valueLabel={`${overlayPhotoOpacity}%`}
-              min={0}
-              max={100}
-              value={overlayPhotoOpacity}
-              onChange={setOverlayPhotoOpacity}
-              disabled={disabled || !overlayOnImage}
-            />
-            <RangeRow
-              label="B&W tint (hue)"
-              valueLabel={`${overlayPhotoHueDeg}°`}
-              min={0}
-              max={360}
-              step={5}
-              value={overlayPhotoHueDeg}
-              onChange={setOverlayPhotoHueDeg}
-              disabled={disabled || !overlayOnImage || !overlayPhotoGrayscale}
-            />
+            {overlayOnImage && (
+              <>
+                <label className="rich-check">
+                  <input
+                    type="checkbox"
+                    checked={overlayPhotoGrayscale}
+                    disabled={disabled}
+                    onChange={(e) => {
+                      const on = e.target.checked
+                      setOverlayPhotoGrayscale(on)
+                      if (!on) setOverlayPhotoHueDeg(0)
+                    }}
+                  />
+                  <span>{'B&W underlay'}</span>
+                  <InfoTip label="When overlay is on, shows the photo in greyscale under the ASCII so glyphs stand out more." />
+                </label>
+                <RangeRow
+                  label="underlay opacity"
+                  valueLabel={`${overlayPhotoOpacity}%`}
+                  min={0}
+                  max={100}
+                  value={overlayPhotoOpacity}
+                  onChange={setOverlayPhotoOpacity}
+                  disabled={disabled}
+                />
+                {overlayPhotoGrayscale && (
+                  <RangeRow
+                    label="B&W tint (hue)"
+                    valueLabel={`${overlayPhotoHueDeg}°`}
+                    min={0}
+                    max={360}
+                    step={5}
+                    value={overlayPhotoHueDeg}
+                    onChange={setOverlayPhotoHueDeg}
+                    disabled={disabled}
+                  />
+                )}
+              </>
+            )}
           </div>
 
           <div className="section section--pad-y">
@@ -1792,44 +1849,54 @@ export default function App() {
           </div>
 
           <div className="section section--pad-y">
-            <RangeRow
-              label="colour saturation"
-              valueLabel={`${colorSaturationPct}%`}
-              min={100}
-              max={250}
-              value={colorSaturationPct}
-              onChange={setColorSaturationPct}
-              disabled={disabled || !useColor}
-            />
-            <label className="rich-check">
-              <input
-                type="checkbox"
-                checked={grayscaleHueTintEnabled}
-                disabled={disabled || useColor}
-                onChange={(e) => setGrayscaleHueTintEnabled(e.target.checked)}
+            {useColor && (
+              <RangeRow
+                label="colour saturation"
+                valueLabel={`${colorSaturationPct}%`}
+                min={100}
+                max={250}
+                value={colorSaturationPct}
+                onChange={setColorSaturationPct}
+                disabled={disabled}
               />
-              <span>greyscale hue tint</span>
-              <InfoTip label="When ASCII is in greyscale (not full colour), colours each glyph from your chosen hue and saturation while lightness still follows the tone ramp." />
-            </label>
-            <RangeRow
-              label="tint hue"
-              valueLabel={`${grayscaleHueTintDeg}°`}
-              min={0}
-              max={360}
-              step={5}
-              value={grayscaleHueTintDeg}
-              onChange={setGrayscaleHueTintDeg}
-              disabled={disabled || useColor || !grayscaleHueTintEnabled}
-            />
-            <RangeRow
-              label="tint saturation"
-              valueLabel={`${grayscaleHueTintSaturationPct}%`}
-              min={5}
-              max={100}
-              value={grayscaleHueTintSaturationPct}
-              onChange={setGrayscaleHueTintSaturationPct}
-              disabled={disabled || useColor || !grayscaleHueTintEnabled}
-            />
+            )}
+            {!useColor && (
+              <>
+                <label className="rich-check">
+                  <input
+                    type="checkbox"
+                    checked={grayscaleHueTintEnabled}
+                    disabled={disabled}
+                    onChange={(e) => setGrayscaleHueTintEnabled(e.target.checked)}
+                  />
+                  <span>greyscale hue tint</span>
+                  <InfoTip label="When ASCII is in greyscale (not full colour), colours each glyph from your chosen hue and saturation while lightness still follows the tone ramp." />
+                </label>
+                {grayscaleHueTintEnabled && (
+                  <>
+                    <RangeRow
+                      label="tint hue"
+                      valueLabel={`${grayscaleHueTintDeg}°`}
+                      min={0}
+                      max={360}
+                      step={5}
+                      value={grayscaleHueTintDeg}
+                      onChange={setGrayscaleHueTintDeg}
+                      disabled={disabled}
+                    />
+                    <RangeRow
+                      label="tint saturation"
+                      valueLabel={`${grayscaleHueTintSaturationPct}%`}
+                      min={5}
+                      max={100}
+                      value={grayscaleHueTintSaturationPct}
+                      onChange={setGrayscaleHueTintSaturationPct}
+                      disabled={disabled}
+                    />
+                  </>
+                )}
+              </>
+            )}
           </div>
 
           <div className="section section--pad-y">
@@ -1879,24 +1946,28 @@ export default function App() {
               />
               <span>animate</span>
             </div>
-            <Combobox<AnimationMode>
-              value={animEnabled ? resolvedAnimMode : animMode}
-              disabled={disabled || !animEnabled}
-              ariaLabel="Animation mode"
-              options={ANIM_MODES.filter(
-                (m) => m !== 'solarize' || solarizeEnabled
-              ).map((k) => ({ value: k, label: animModeLabel[k] }))}
-              onChange={(v) => setAnimMode(v)}
-            />
-            <RangeRow
-              label="speed"
-              valueLabel={String(Math.round(animSpeed * 100))}
-              min={20}
-              max={300}
-              value={Math.round(animSpeed * 100)}
-              onChange={(n) => setAnimSpeed(n / 100)}
-              disabled={disabled || !animEnabled}
-            />
+            {animEnabled && (
+              <>
+                <Combobox<AnimationMode>
+                  value={resolvedAnimMode}
+                  disabled={disabled}
+                  ariaLabel="Animation mode"
+                  options={ANIM_MODES.filter(
+                    (m) => m !== 'solarize' || solarizeEnabled
+                  ).map((k) => ({ value: k, label: animModeLabel[k] }))}
+                  onChange={(v) => setAnimMode(v)}
+                />
+                <RangeRow
+                  label="speed"
+                  valueLabel={String(Math.round(animSpeed * 100))}
+                  min={20}
+                  max={300}
+                  value={Math.round(animSpeed * 100)}
+                  onChange={(n) => setAnimSpeed(n / 100)}
+                  disabled={disabled}
+                />
+              </>
+            )}
           </div>
         </div>
       </aside>

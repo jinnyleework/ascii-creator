@@ -749,16 +749,18 @@ export function EightBitTool({ onBackHome }: { onBackHome: () => void }) {
               <span>overlay on image</span>
               <InfoTip label="Draws the quantised pixel grid on top of your source image, aligned to the same sampling grid as the flat preview." />
             </label>
-            <label className="rich-check">
-              <input
-                type="checkbox"
-                checked={overlayPhotoGrayscale}
-                disabled={disabled || !overlayOnImage}
-                onChange={(e) => setOverlayPhotoGrayscale(e.target.checked)}
-              />
-              <span>{'B&W underlay'}</span>
-              <InfoTip label="When overlay is on, shows the photo in greyscale under the pixel layer." />
-            </label>
+            {overlayOnImage && (
+              <label className="rich-check">
+                <input
+                  type="checkbox"
+                  checked={overlayPhotoGrayscale}
+                  disabled={disabled}
+                  onChange={(e) => setOverlayPhotoGrayscale(e.target.checked)}
+                />
+                <span>{'B&W underlay'}</span>
+                <InfoTip label="When overlay is on, shows the photo in greyscale under the pixel layer." />
+              </label>
+            )}
           </div>
 
           <div className="section section--pad-y">
@@ -835,15 +837,17 @@ export function EightBitTool({ onBackHome }: { onBackHome: () => void }) {
           </div>
 
           <div className="section section--pad-y">
-            <RangeRow
-              label="colour saturation"
-              valueLabel={`${colorSaturationPct}%`}
-              min={100}
-              max={250}
-              value={colorSaturationPct}
-              onChange={setColorSaturationPct}
-              disabled={disabled || !useColor}
-            />
+            {useColor && (
+              <RangeRow
+                label="colour saturation"
+                valueLabel={`${colorSaturationPct}%`}
+                min={100}
+                max={250}
+                value={colorSaturationPct}
+                onChange={setColorSaturationPct}
+                disabled={disabled}
+              />
+            )}
           </div>
 
           <div className="section section--pad-y">
@@ -891,15 +895,17 @@ export function EightBitTool({ onBackHome }: { onBackHome: () => void }) {
               />
               <span>animate (hue)</span>
             </div>
-            <RangeRow
-              label="speed"
-              valueLabel={String(Math.round(animSpeed * 100))}
-              min={20}
-              max={300}
-              value={Math.round(animSpeed * 100)}
-              onChange={(n: number) => setAnimSpeed(n / 100)}
-              disabled={disabled || !animEnabled}
-            />
+            {animEnabled && (
+              <RangeRow
+                label="speed"
+                valueLabel={String(Math.round(animSpeed * 100))}
+                min={20}
+                max={300}
+                value={Math.round(animSpeed * 100)}
+                onChange={(n: number) => setAnimSpeed(n / 100)}
+                disabled={disabled}
+              />
+            )}
           </div>
 
           <div className="section section--pad-y">
